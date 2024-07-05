@@ -1,20 +1,17 @@
-# Use an official Python runtime as a base image
-FROM python:3.10-slim
+# Use a base image with JDK
+FROM openjdk:17-jdk-alpine
 
-# Set the working directory in the container to /app
+# Set the working directory inside the container
 WORKDIR /app
 
-# Copy the backend directory contents into the container at /app
-COPY . /app
+# Copy the jar file into the Docker image
+COPY target/t2p-validation-0.0.1-SNAPSHOT.jar /app/
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy the resources into the Docker image
+COPY src/main/resources/ /app/src/main/resources/
 
-# Make port 5000 available to the world outside this container
-EXPOSE 5000
+# Expose the port your Spring Boot app runs on
+EXPOSE 8080
 
-# Define environment variable if needed
-ENV NAME World
-
-# Run app.py when the container launches
-CMD ["python", "app/backend/app.py"]
+# Command to run the application
+ENTRYPOINT ["java", "-jar", "t2p-validation-0.0.1-SNAPSHOT.jar"]

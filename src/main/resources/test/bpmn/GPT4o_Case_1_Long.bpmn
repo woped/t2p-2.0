@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xsi:schemaLocation="http://www.omg.org/spec/BPMN/20100524/MODEL BPMN20.xsd"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:tns="http://www.example.org/definitions"
+             targetNamespace="http://www.example.org/definitions">
+
+  <process id="longProcess" name="Langer Geschäftsprozess" isExecutable="true">
+    <startEvent id="startEvent" name="Prozessstart"/>
+    <sequenceFlow id="flow1" sourceRef="startEvent" targetRef="task1"/>
+
+    <userTask id="task1" name="Aufgabe 1"/>
+    <sequenceFlow id="flow2" sourceRef="task1" targetRef="gateway1"/>
+
+    <exclusiveGateway id="gateway1" name="Entscheidungspunkt 1"/>
+    <sequenceFlow id="flow3" sourceRef="gateway1" targetRef="task2" name="Option 1"/>
+    <sequenceFlow id="flow4" sourceRef="gateway1" targetRef="task3" name="Option 2"/>
+
+    <userTask id="task2" name="Aufgabe 2"/>
+    <sequenceFlow id="flow5" sourceRef="task2" targetRef="gateway2"/>
+
+    <userTask id="task3" name="Aufgabe 3"/>
+    <sequenceFlow id="flow6" sourceRef="task3" targetRef="gateway2"/>
+
+    <exclusiveGateway id="gateway2" name="Entscheidungspunkt 2"/>
+    <sequenceFlow id="flow7" sourceRef="gateway2" targetRef="task4" name="Option A"/>
+    <sequenceFlow id="flow8" sourceRef="gateway2" targetRef="task5" name="Option B"/>
+
+    <userTask id="task4" name="Aufgabe 4"/>
+    <sequenceFlow id="flow9" sourceRef="task4" targetRef="task6"/>
+
+    <userTask id="task5" name="Aufgabe 5"/>
+    <sequenceFlow id="flow10" sourceRef="task5" targetRef="task6"/>
+
+    <userTask id="task6" name="Aufgabe 6"/>
+    <sequenceFlow id="flow11" sourceRef="task6" targetRef="gateway3"/>
+
+    <exclusiveGateway id="gateway3" name="Entscheidungspunkt 3"/>
+    <sequenceFlow id="flow12" sourceRef="gateway3" targetRef="task7" name="Option X"/>
+    <sequenceFlow id="flow13" sourceRef="gateway3" targetRef="task8" name="Option Y"/>
+
+    <userTask id="task7" name="Aufgabe 7"/>
+    <sequenceFlow id="flow14" sourceRef="task7" targetRef="task9"/>
+
+    <userTask id="task8" name="Aufgabe 8"/>
+    <sequenceFlow id="flow15" sourceRef="task8" targetRef="task9"/>
+
+    <userTask id="task9" name="Aufgabe 9"/>
+    <sequenceFlow id="flow16" sourceRef="task9" targetRef="gateway4"/>
+
+    <exclusiveGateway id="gateway4" name="Entscheidungspunkt 4"/>
+    <sequenceFlow id="flow17" sourceRef="gateway4" targetRef="task10" name="Option M"/>
+    <sequenceFlow id="flow18" sourceRef="gateway4" targetRef="task11" name="Option N"/>
+
+    <userTask id="task10" name="Aufgabe 10"/>
+    <sequenceFlow id="flow19" sourceRef="task10" targetRef="task12"/>
+
+    <userTask id="task11" name="Aufgabe 11"/>
+    <sequenceFlow id="flow20" sourceRef="task11" targetRef="task12"/>
+
+    <userTask id="task12" name="Aufgabe 12"/>
+    <sequenceFlow id="flow21" sourceRef="task12" targetRef="gateway5"/>
+
+    <exclusiveGateway id="gateway5" name="Entscheidungspunkt 5"/>
+    <sequenceFlow id="flow22" sourceRef="gateway5" targetRef="task13" name="Option P"/>
+    <sequenceFlow id="flow23" sourceRef="gateway5" targetRef="task14" name="Option Q"/>
+
+    <userTask id="task13" name="Aufgabe 13"/>
+    <sequenceFlow id="flow24" sourceRef="task13" targetRef="task15"/>
+
+    <userTask id="task14" name="Aufgabe 14"/>
+    <sequenceFlow id="flow25" sourceRef="task14" targetRef="task15"/>
+
+    <userTask id="task15" name="Aufgabe 15"/>
+    <sequenceFlow id="flow26" sourceRef="task15" targetRef="endEvent"/>
+
+    <endEvent id="endEvent" name="Prozessende"/>
+  </process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="longProcess">
+      <!-- Diagram elements will be added here, if needed -->
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>
+

@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xsi:schemaLocation="http://www.omg.org/spec/BPMN/20100524/MODEL BPMN20.xsd"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:omgdc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:omgdi="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:activiti="http://activiti.org/bpmn"
+             typeLanguage="http://www.w3.org/2001/XMLSchema"
+             expressionLanguage="http://www.w3.org/1999/XPath"
+             targetNamespace="http://www.activiti.org/processdef">
+
+  <process id="simpleProcess" name="Einfacher Prozess" isExecutable="true">
+    <!-- Start Event -->
+    <startEvent id="startEvent" name="Start">
+      <outgoing>sequenceFlow1</outgoing>
+    </startEvent>
+
+    <!-- Task -->
+    <userTask id="userTask1" name="Erste Aufgabe">
+      <incoming>sequenceFlow1</incoming>
+      <outgoing>sequenceFlow2</outgoing>
+    </userTask>
+
+    <!-- Exclusive Gateway -->
+    <exclusiveGateway id="exclusiveGateway" name="Entscheidungspunkt">
+      <incoming>sequenceFlow2</incoming>
+      <outgoing>sequenceFlow3</outgoing>
+      <outgoing>sequenceFlow4</outgoing>
+    </exclusiveGateway>
+
+    <!-- Task for the first path -->
+    <userTask id="userTask2" name="Aufgabe A">
+      <incoming>sequenceFlow3</incoming>
+      <outgoing>sequenceFlow5</outgoing>
+    </userTask>
+
+    <!-- Task for the second path -->
+    <userTask id="userTask3" name="Aufgabe B">
+      <incoming>sequenceFlow4</incoming>
+      <outgoing>sequenceFlow6</outgoing>
+    </userTask>
+
+    <!-- End Event A -->
+    <endEvent id="endEventA" name="Ende A">
+      <incoming>sequenceFlow5</incoming>
+    </endEvent>
+
+    <!-- End Event B -->
+    <endEvent id="endEventB" name="Ende B">
+      <incoming>sequenceFlow6</incoming>
+    </endEvent>
+
+    <!-- Sequence Flows -->
+    <sequenceFlow id="sequenceFlow1" sourceRef="startEvent" targetRef="userTask1"/>
+    <sequenceFlow id="sequenceFlow2" sourceRef="userTask1" targetRef="exclusiveGateway"/>
+    <sequenceFlow id="sequenceFlow3" sourceRef="exclusiveGateway" targetRef="userTask2"/>
+    <sequenceFlow id="sequenceFlow4" sourceRef="exclusiveGateway" targetRef="userTask3"/>
+    <sequenceFlow id="sequenceFlow5" sourceRef="userTask2" targetRef="endEventA"/>
+    <sequenceFlow id="sequenceFlow6" sourceRef="userTask3" targetRef="endEventB"/>
+  </process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_simpleProcess">
+    <bpmndi:BPMNPlane id="BPMNPlane_simpleProcess" bpmnElement="simpleProcess">
+      <bpmndi:BPMNShape id="BPMNShape_startEvent" bpmnElement="startEvent">
+        <omgdc:Bounds x="100" y="100" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_userTask1" bpmnElement="userTask1">
+        <omgdc:Bounds x="200" y="80" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_exclusiveGateway" bpmnElement="exclusiveGateway">
+        <omgdc:Bounds x="350" y="100" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_userTask2" bpmnElement="userTask2">
+        <omgdc:Bounds x="450" y="50" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_userTask3" bpmnElement="userTask3">
+        <omgdc:Bounds x="450" y="150" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_endEventA" bpmnElement="endEventA">
+        <omgdc:Bounds x="600" y="70" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="BPMNShape_endEventB" bpmnElement="endEventB">
+        <omgdc:Bounds x="600" y="170" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="BPMNEdge_sequenceFlow1" bpmnElement="sequenceFlow1">
+        <omgdi:waypoint x="136" y="118"/>
+        <omgdi:waypoint x="200" y="118"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_sequenceFlow2" bpmnElement="sequenceFlow2">
+        <omgdi:waypoint x="300" y="118"/>
+        <omgdi:waypoint x="350" y="118"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_sequenceFlow3" bpmnElement="sequenceFlow3">
+        <omgdi:waypoint x="400" y="100"/>
+        <omgdi:waypoint x="450" y="90"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_sequenceFlow4" bpmnElement="sequenceFlow4">
+        <omgdi:waypoint x="400" y="150"/>
+        <omgdi:waypoint x="450" y="190"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_sequenceFlow5" bpmnElement="sequenceFlow5">
+        <omgdi:waypoint x="550" y="90"/>
+        <omgdi:waypoint x="600" y="90"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="BPMNEdge_sequenceFlow6" bpmnElement="sequenceFlow6">
+        <omgdi:waypoint x="550" y="190"/>
+        <omgdi:waypoint x="600" y="190"/>
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>
