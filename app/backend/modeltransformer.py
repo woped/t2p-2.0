@@ -3,8 +3,8 @@ import requests
 import app.config
 
 
-class model_transformer:
-    def __init__(self, model, tokenizer):
+class ModelTransformer:
+    def __init__(self):
         self.transformer_url = app.config.TRANSFORMER_BASE_URL + "/transform"
 
     def transform(self, bpmn_xml):
