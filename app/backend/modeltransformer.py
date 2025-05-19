@@ -1,5 +1,5 @@
+import config
 import requests
-import app.config
 import logging
 
 # Configure a logger for this module
@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class ModelTransformer:
     def __init__(self):
-        self.transformer_url = app.config.TRANSFORMER_BASE_URL + "/transform"
+        self.transformer_url = config.TRANSFORMER_BASE_URL + "/transform"
 
     def transform(self, bpmn_xml):
         """

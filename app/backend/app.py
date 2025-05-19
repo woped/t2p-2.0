@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
 import requests
 
-from app.backend.modeltransformer import ModelTransformer
 from gpt_process import ApiCaller
+from modeltransformer import ModelTransformer
 
 app = Flask(__name__)
 
