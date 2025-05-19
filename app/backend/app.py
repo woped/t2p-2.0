@@ -1,9 +1,9 @@
 from flask import Flask, request, jsonify
 from gpt_process import ApiCaller
-
+from app.config import TRANSFORMER_BASE_URL
 app = Flask(__name__)
 # app.config['APPLICATION_ROOT'] = '/t2p-2.0'
-
+url = TRANSFORMER_BASE_URL + "/transform"
 @app.route('/test_connection', methods=['GET'])
 def test():
     try:
