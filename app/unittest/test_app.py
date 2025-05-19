@@ -3,12 +3,12 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+from app.backend.app import app
+
 # Add the app/backend directory to the Python path.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../backend')))
 
-# Use relative import for the app code.
-from app import app
-from backend.gpt_process import ApiCaller
+
 # The following is the test for the app.py file.
 class TestApp(unittest.TestCase):
     """
@@ -53,6 +53,12 @@ class TestApp(unittest.TestCase):
             mock.return_value.conversion_pipeline.return_value = "Success"
             response = self.app.post('/api_call', json={"text": "Hello", "api_key": "123"})
             self.assertEqual(response.status_code, 200)
+
+    def test_transformer_call_success(self):
+        pass
+
+    def test_transformer_call_failure(self):
+        pass
             
 
 if __name__ == '__main__':
