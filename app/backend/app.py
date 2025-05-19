@@ -1,59 +1,121 @@
 from flask import Flask, request, jsonify
+import requests
 
 from app.backend.modeltransformer import ModelTransformer
 from gpt_process import ApiCaller
-from app.config import TRANSFORMER_BASE_URL
 
 app = Flask(__name__)
-# app.config['APPLICATION_ROOT'] = '/t2p-2.0'
-url = TRANSFORMER_BASE_URL + "/transform"
 
-
-@app.route('/test_connection', methods=['GET'])
+@app.route("/test_connection", methods=["GET"])
 def test():
     try:
         return jsonify("Successful"), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Error in /test_connection: {str(e)}")
+        return jsonify({"error": "Test connection failed.", "details": str(e)}), 500
 
 
-@app.route('/api_call', methods=['POST'])
+@app.route("/api_call", methods=["POST"])
 def api_call():
     try:
         data = request.json
+        if not data:
+            return jsonify({"error": "Request body must be JSON."}), 400
 
-        # Check for missing 'text' or 'api_key' in the request data
-        if 'text' not in data or 'api_key' not in data:
-            missing = []
-            if 'text' not in data:
-                missing.append('text')
-            if 'api_key' not in data:
-                missing.append('api_key')
-            return jsonify({"error": f"Missing data for: {', '.join(missing)}"}), 400
+        missing_fields = []
+        if "text" not in data:
+            missing_fields.append("text")
+        if "api_key" not in data:
+            missing_fields.append("api_key")
 
-        # Create the ApiCaller class object with the extracted API key
-        ac = ApiCaller(api_key=data['api_key'])
+        if missing_fields:
+            return (
+                jsonify(
+                    {"error": f"Missing data for: {', '.join(missing_fields)}"}
+                ),
+                400,
+            )
+
+        ac = ApiCaller(api_key=data["api_key"])
         transformer = ModelTransformer()
 
-        # Process the data using the run method of ApiCaller
-        result_bpmn = ac.conversion_pipeline(data['text'])
+        # This part could also raise exceptions.
+        # Consider specific error handling for conversion_pipeline if needed.
+        result_bpmn = ac.conversion_pipeline(data["text"])
 
-        result = transformer.transform(result_bpmn)
-        # If the result contains an error message, return it with a 500 status code
-        if "{'error': {'message':" in result:
-            return jsonify({"error": result}), 500
+        # Call the transform method, which might raise exceptions
+        transformed_xml = transformer.transform(result_bpmn)
 
-        # Return the outcome of the run method
-        return jsonify({"result": result}), 200
+        return jsonify({"result": transformed_xml}), 200
 
+    except requests.exceptions.HTTPError as e_http:
+        # Error response from the transformer service (4xx or 5xx)
+        app.logger.error(
+            f"Transformation service HTTPError in /api_call: "
+            f"Status: {e_http.response.status_code}, Response: {e_http.response.text}"
+        )
+        error_payload = {
+            "error": "BPMN to PNML transformation failed.",
+            "details": {
+                "type": "TransformerServiceError",
+                "message": "The transformation service responded with an error.",
+                "service_status_code": e_http.response.status_code,
+            },
+        }
+        # Try to include parsed error from transformer if it's JSON
+        try:
+            error_payload["details"]["service_response"] = (
+                e_http.response.json()
+            )
+        except ValueError:
+            error_payload["details"]["service_response"] = e_http.response.text
+
+        return jsonify(error_payload), 500
+
+    except requests.exceptions.RequestException as e_req:
+        # Network error or other issue connecting to the transformer service
+        app.logger.error(
+            f"Transformation service RequestException in /api_call: {str(e_req)}"
+        )
+        return (
+            jsonify(
+                {
+                    "error": "Failed to communicate with the BPMN transformation service.",
+                    "details": {
+                        "type": "NetworkError",
+                        "message": "Could not connect to or get a response from the transformation service.",
+                        "original_error": str(e_req), # Be cautious with exposing raw error strings
+                    },
+                }
+            ),
+            500,
+        )
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Catch-all for other unexpected errors (e.g., in ApiCaller, or other logic)
+        app.logger.error(
+            f"An unexpected error occurred in /api_call: {str(e)}",
+            exc_info=True,
+        ) # exc_info=True logs the stack trace
+        return (
+            jsonify(
+                {
+                    "error": "An unexpected internal server error occurred.",
+                    "details": {"type": "InternalServerError", "message": str(e)},
+                }
+            ),
+            500,
+        )
 
 
-@app.route('/_/_/echo')
+@app.route("/_/_/echo")
 def echo():
     return jsonify(success=True)
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0')
+if __name__ == "__main__":
+    # Basic logging configuration for development
+    # For production, use a more robust logging setup (e.g., Gunicorn's logger)
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    app.run(host="0.0.0.0", port=5000) # Default port is 5000
