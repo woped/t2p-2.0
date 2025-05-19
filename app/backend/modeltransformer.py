@@ -1,6 +1,10 @@
-import config
-import requests
+import json
 import logging
+
+import requests
+from json2xml import json2xml
+
+import config
 
 # Configure a logger for this module
 logger = logging.getLogger(__name__)
@@ -18,8 +22,10 @@ class ModelTransformer:
         :raises requests.exceptions.HTTPError: If the transformer service returns a 4xx or 5xx error.
         :raises requests.exceptions.RequestException: For other network or request-related issues.
         """
+        with open("bpmn_output.bpmn", "r") as file:
+            xml = file.read()
         query_params = {"direction": "bpmntopnml"}
-        request_body_data = {"bpmn": bpmn_xml}
+        request_body_data = {"bpmn": xml}
 
         try:
             response = requests.post(
@@ -33,8 +39,9 @@ class ModelTransformer:
             response.raise_for_status()
 
             # If successful, the response content is the transformed XML
-            transformed_xml_text = response.text
-            return transformed_xml_text
+            response_json = json.loads(response.text)
+            print(response_json["pnml"])
+            return response_json["pnml"]
 
         except requests.exceptions.HTTPError as e_http:
             # Log the detailed error from the transformer service
