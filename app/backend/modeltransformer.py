@@ -23,8 +23,8 @@ class ModelTransformer:
         :raises requests.exceptions.RequestException: For other network or request-related issues.
         """
         #TODO: Remove testing code
-        with open("bpmn_output.bpmn", "r") as file:
-            xml = file.read()
+        xml = bpmn_xml
+
         query_params = {"direction": "bpmntopnml"}
         request_body_data = {"bpmn": xml}
 
