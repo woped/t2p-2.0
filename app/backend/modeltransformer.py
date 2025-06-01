@@ -22,7 +22,6 @@ class ModelTransformer:
         :raises requests.exceptions.HTTPError: If the transformer service returns a 4xx or 5xx error.
         :raises requests.exceptions.RequestException: For other network or request-related issues.
         """
-        #TODO: Remove testing code
         xml = bpmn_xml
 
         query_params = {"direction": "bpmntopnml"}
