@@ -40,7 +40,7 @@ class ModelTransformer:
 
             # If successful, the response content is the transformed XML
             response_json = json.loads(response.text)
-            print(response_json["pnml"])
+            logger.debug(response_json["pnml"])
             return response_json["pnml"]
 
         except requests.exceptions.HTTPError as e_http:
