@@ -1,8 +1,8 @@
 import unittest
 import os
 import sys
-from unittest.mock import MagicMock, patch, mock_open
-import app.config as config
+from unittest.mock import MagicMock, patch
+import app.backend.config as config
 import requests
 
 from app.backend.app import app

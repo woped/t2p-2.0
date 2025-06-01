@@ -1,8 +1,6 @@
-import openai
-import json
 import requests
 import json
-from app.backend.xml_parser import json_to_bpmn
+from xml_parser import json_to_bpmn
 
 class ApiCaller:
     def __init__(self, api_key):
