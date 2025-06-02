@@ -1,10 +1,9 @@
 import json
 import logging
 
+import config
 import requests
 from json2xml import json2xml
-
-import config
 
 # Configure a logger for this module
 logger = logging.getLogger(__name__)
@@ -14,7 +13,7 @@ class ModelTransformer:
     def __init__(self):
         self.transformer_url = config.TRANSFORMER_BASE_URL + "/transform"
 
-    def transform(self, bpmn_xml):
+    def transform(self, bpmn_xml, directionParams=None):
         """
         Transform the BPMN XML using the transformer model.
         :param bpmn_xml: The BPMN XML to transform.
@@ -24,7 +23,7 @@ class ModelTransformer:
         """
         xml = bpmn_xml
 
-        query_params = {"direction": "bpmntopnml"}
+        query_params = directionParams
         request_body_data = {"bpmn": xml}
 
         try:
@@ -58,4 +57,3 @@ class ModelTransformer:
             )
             # Re-raise the exception to be handled by the caller (app.py)
             raise
-
