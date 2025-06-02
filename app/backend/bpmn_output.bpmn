@@ -1,33 +1,32 @@
 <?xml version='1.0' encoding='utf-8'?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.omg.org/spec/BPMN/20100524/MODEL BPMN20.xsd" targetNamespace="http://example.bpmn.com/schema/bpmn">
   <process id="Process_1" isExecutable="false">
-    <startEvent id="startEvent1" name="Customer Brings Defective Computer" />
-    <endEvent id="endEvent1" name="Customer Takes Computer Home Unrepaired" />
-    <endEvent id="endEvent2" name="Repair Finished" />
-    <UserTask id="task1" name="Check Defect" />
-    <UserTask id="task2" name="Hand Out Repair Cost Calculation" />
-    <UserTask id="task3" name="Check and Repair Hardware" />
-    <UserTask id="task4" name="Check and Configure Software" />
-    <UserTask id="task5" name="Test System Functionality" />
-    <ExclusiveGateway id="gateway1" name="Cost Acceptable?" />
-    <ParallelGateway id="gateway2" name="Repair Activities Split" />
-    <ParallelGateway id="gateway3" name="Repair Activities Join" />
-    <ExclusiveGateway id="gateway4" name="Error Detected?" />
-    <ExclusiveGateway id="gateway5" name="Repair Loop Decision" />
+    <startEvent id="startEvent1" name="Process Initiation" />
+    <endEvent id="endEvent1" name="Process Completion" />
+    <UserTask id="task1" name="Gather Requirements" />
+    <ServiceTask id="task2" name="Analyze Requirements" />
+    <UserTask id="task3" name="Design Solution" />
+    <ServiceTask id="task4" name="Develop Solution" />
+    <UserTask id="task5" name="Test Solution" />
+    <UserTask id="task6" name="Deploy Solution" />
+    <UserTask id="task7" name="Review Deployment" />
+    <ExclusiveGateway id="gateway1" name="Requirement Analysis Decision" />
+    <ExclusiveGateway id="gateway2" name="Design Approval" />
+    <ParallelGateway id="gateway3" name="Development and Testing Split" />
+    <ParallelGateway id="gateway4" name="Development and Testing Join" />
     <sequenceFlow id="flow1" sourceRef="startEvent1" targetRef="task1" />
     <sequenceFlow id="flow2" sourceRef="task1" targetRef="task2" />
     <sequenceFlow id="flow3" sourceRef="task2" targetRef="gateway1" />
-    <sequenceFlow id="flow4" sourceRef="gateway1" targetRef="endEvent1" />
-    <sequenceFlow id="flow5" sourceRef="gateway1" targetRef="gateway2" />
-    <sequenceFlow id="flow6" sourceRef="gateway2" targetRef="task3" />
-    <sequenceFlow id="flow7" sourceRef="gateway2" targetRef="task4" />
-    <sequenceFlow id="flow8" sourceRef="task3" targetRef="gateway3" />
-    <sequenceFlow id="flow9" sourceRef="task4" targetRef="gateway3" />
-    <sequenceFlow id="flow10" sourceRef="gateway3" targetRef="task5" />
-    <sequenceFlow id="flow11" sourceRef="task5" targetRef="gateway4" />
-    <sequenceFlow id="flow12" sourceRef="gateway4" targetRef="gateway5" />
-    <sequenceFlow id="flow13" sourceRef="gateway4" targetRef="endEvent2" />
-    <sequenceFlow id="flow14" sourceRef="gateway5" targetRef="gateway2" />
+    <sequenceFlow id="flow4" sourceRef="gateway1" targetRef="task3" />
+    <sequenceFlow id="flow5" sourceRef="task3" targetRef="gateway2" />
+    <sequenceFlow id="flow6" sourceRef="gateway2" targetRef="gateway3" />
+    <sequenceFlow id="flow7" sourceRef="gateway3" targetRef="task4" />
+    <sequenceFlow id="flow8" sourceRef="gateway3" targetRef="task5" />
+    <sequenceFlow id="flow9" sourceRef="task4" targetRef="gateway4" />
+    <sequenceFlow id="flow10" sourceRef="task5" targetRef="gateway4" />
+    <sequenceFlow id="flow11" sourceRef="gateway4" targetRef="task6" />
+    <sequenceFlow id="flow12" sourceRef="task6" targetRef="task7" />
+    <sequenceFlow id="flow13" sourceRef="task7" targetRef="endEvent1" />
   </process>
   <bpmndi:BPMNDiagram id="BPMNDiagram_1">
     <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_1">
@@ -46,13 +45,16 @@
       <bpmndi:BPMNShape id="task5_di" bpmnElement="task5">
         <dc:Bounds x="100" y="100" width="100" height="80" />
       </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task6_di" bpmnElement="task6">
+        <dc:Bounds x="100" y="100" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="task7_di" bpmnElement="task7">
+        <dc:Bounds x="100" y="100" width="100" height="80" />
+      </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="startEvent1_di" bpmnElement="startEvent1">
         <dc:Bounds x="100" y="100" width="100" height="80" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="endEvent1_di" bpmnElement="endEvent1">
-        <dc:Bounds x="100" y="100" width="100" height="80" />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="endEvent2_di" bpmnElement="endEvent2">
         <dc:Bounds x="100" y="100" width="100" height="80" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="gateway1_di" bpmnElement="gateway1">
@@ -65,9 +67,6 @@
         <dc:Bounds x="100" y="100" width="100" height="80" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="gateway4_di" bpmnElement="gateway4">
-        <dc:Bounds x="100" y="100" width="100" height="80" />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="gateway5_di" bpmnElement="gateway5">
         <dc:Bounds x="100" y="100" width="100" height="80" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="flow1_di" bpmnElement="flow1">
@@ -119,10 +118,6 @@
         <di:waypoint x="250" y="150" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="flow13_di" bpmnElement="flow13">
-        <di:waypoint x="120" y="150" />
-        <di:waypoint x="250" y="150" />
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="flow14_di" bpmnElement="flow14">
         <di:waypoint x="120" y="150" />
         <di:waypoint x="250" y="150" />
       </bpmndi:BPMNEdge>
