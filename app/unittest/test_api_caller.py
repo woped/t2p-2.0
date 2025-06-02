@@ -16,7 +16,7 @@ class ApiCallerTester:
         Args:
             api_key (str, optional): OpenAI API key. If not provided, it will be read from environment variable.
         """
-        self.api_key = "sk-proj-7W9gBDJXTE6oTbtckNAbT3BlbkFJbiG7TwPlyjj2lQMoBoR6"
+        self.api_key = "API_KEY"
         if not self.api_key:
             raise ValueError("API key not provided and not found in environment variables")
         
