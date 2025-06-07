@@ -1,51 +1,44 @@
-from flask import Flask, request, jsonify
-from gpt_process import ApiCaller
+from flask import Flask, jsonify
+from handlecall import HandleCall
 
 app = Flask(__name__)
-# app.config['APPLICATION_ROOT'] = '/t2p-2.0'
 
-@app.route('/test_connection', methods=['GET'])
+
+@app.route("/test_connection", methods=["GET"])
 def test():
     try:
         return jsonify("Successful"), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        app.logger.error(f"Error in /test_connection: {str(e)}")
+        return jsonify({"error": "Test connection failed.", "details": str(e)}), 500
 
-@app.route('/api_call', methods=['POST'])
+
+# The endpoint will be deprecated in the future.
+# For different format use /generate_bpmn and generate_pnml endpoints.
+@app.route("/api_call", methods=["POST"])
 def api_call():
-    try:
-        data = request.json
-        
-        # Check for missing 'text' or 'api_key' in the request data
-        if 'text' not in data or 'api_key' not in data:
-            missing = []
-            if 'text' not in data:
-                missing.append('text')
-            if 'api_key' not in data:
-                missing.append('api_key')
-            return jsonify({"error": f"Missing data for: {', '.join(missing)}"}), 400
-        
-        # Create the ApiCaller class object with the extracted API key
-        ac = ApiCaller(api_key=data['api_key'])
-
-        # Process the data using the run method of ApiCaller
-        result = ac.conversion_pipeline(data['text'])
-
-        # If the result contains an error message, return it with a 500 status code
-        if "{'error': {'message':" in result:
-            return jsonify({"error": result}), 500
-
-        # Return the outcome of the run method
-        return jsonify({"result": result}), 200
-    
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return HandleCall.handle(app, {"direction": "bpmntopnml"})
 
 
-@app.route('/_/_/echo')
+@app.route("/generate_BPMN", methods=["POST"])
+def generateBPMN():
+    return HandleCall.handle(app, {"direction": "bpmntopnml"})
+
+
+@app.route("/generate_PNML", methods=["POST"])
+def generatePNML():
+    return HandleCall.handle(app, {"direction": "pnmltobpmn"})
+
+
+@app.route("/_/_/echo")
 def echo():
     return jsonify(success=True)
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0')
+if __name__ == "__main__":
+    # Basic logging configuration for development
+    # For production, use a more robust logging setup (e.g., Gunicorn's logger)
+    import logging
+
+    logging.basicConfig(level=logging.INFO)
+    app.run(host="0.0.0.0", port=5000)  # Default port is 5000
