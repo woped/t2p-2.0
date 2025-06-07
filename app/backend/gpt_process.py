@@ -1,15 +1,16 @@
 import openai
 import json
 import requests
-from xml_parser import json_to_bpmn
-from config import PROMPTING_STRATEGIE, API_HOST, API_PORT
+from backend.xml_parser import json_to_bpmn
+from backend.config import PROMPTING_STRATEGIE, API_HOST, API_PORT
+
 
 class ApiCaller:
     def __init__(self, api_key):
         self.api_key = api_key
         # Construct the URL using config values
         self.flask_app_url = f"https://{API_HOST}/llm-api-connector/call_openai"
-        if API_PORT != 443: 
+        if API_PORT != 443:
             self.flask_app_url = f"https://{API_HOST}:{API_PORT}/llm-api-connector/call_openai"
 
     def call_api(self, user_text):
@@ -24,24 +25,21 @@ class ApiCaller:
         try:
             response = requests.post(self.flask_app_url, headers=headers, json=data_payload)
             if response.status_code == 200:
-                # Process the response
                 response_data = response.json()
-                return response_data['message']  
+                return response_data['message']
             else:
                 return f"An error occurred: {response.text}"
-            
         except Exception as e:
             return f"An exception occurred: {str(e)}"
-            
+
     def conversion_pipeline(self, process_description):
         try:
             json_data = self.generate_bpmn_json(process_description)
             xml_data = json_to_bpmn(json.loads(json_data))
             return xml_data
         except Exception as e:
-            return f"An error occurred: {str(e)}"  
+            return f"An error occurred: {str(e)}"
 
     def generate_bpmn_json(self, user_description):
         json_output = self.call_api(user_text=user_description)
         return json_output
-
