@@ -23,6 +23,8 @@ https://docs.docker.com/desktop/wsl/
 
 ### Setting Up Your Local Environment
 
+After cloning this repository, it's essential to [set up git hooks](https://github.com/woped/woped-git-hooks/blob/main/README.md#activating-git-hooks-after-cloning-a-repository) to ensure project standards.
+
 To set up the local envoronment without docker, use these commands:
 
 - Create local environment:
