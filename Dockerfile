@@ -4,6 +4,9 @@ FROM python:3.10-slim
 # Set the working directory in the container to /app
 WORKDIR /app
 
+RUN mkdir -p /logs && \
+    chmod 777 /logs
+
 # Copy the backend directory contents into the container at /app
 COPY . /app
 
