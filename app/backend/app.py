@@ -15,7 +15,7 @@ API_CALL_DURATION = Histogram('api_call_duration_seconds', 'API call processing 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Console handler
+# Console handler with JSON format
 console_handler = logging.StreamHandler()
 console_formatter = jsonlogger.JsonFormatter(
     '%(asctime)s %(levelname)s %(name)s %(message)s',
@@ -23,17 +23,6 @@ console_formatter = jsonlogger.JsonFormatter(
 )
 console_handler.setFormatter(console_formatter)
 logger.addHandler(console_handler)
-
-# File handler for Promtail
-log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'logs')
-os.makedirs(log_dir, exist_ok=True)
-file_handler = logging.FileHandler(os.path.join(log_dir, 'application.log'))
-file_formatter = jsonlogger.JsonFormatter(
-    '%(asctime)s %(levelname)s %(name)s %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
-file_handler.setFormatter(file_formatter)
-logger.addHandler(file_handler)
 
 app = Flask(__name__)
 # app.config['APPLICATION_ROOT'] = '/t2p-2.0'
