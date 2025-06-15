@@ -1,0 +1,37 @@
+openapi: 3.0.0
+info:
+  title: Flask API
+  version: 1.0.0
+paths:
+  /test_connection:
+    get:
+      summary: Test the connection
+      responses:
+        200:
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: string
+                example: "Successful"
+  /api_call:
+    post:
+      summary: Handle API call
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                api_key:
+                  type: string
+      responses:
+        200:
+          description: Successful response
+        400:
+          description: Bad request
+        500:
+          description: Internal server error
