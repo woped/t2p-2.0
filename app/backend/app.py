@@ -8,7 +8,7 @@ from handlecall import HandleCall
 app = Flask(__name__)
 
 SWAGGER_URL = '/swagger'
-API_URL = '/backend/swagger.yaml'  # Adjusted path
+API_URL = '/backend/swagger.yaml'
 swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
 app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 
