@@ -1,5 +1,3 @@
-import openai
-import json
 import requests
 import json
 from xml_parser import json_to_bpmn
