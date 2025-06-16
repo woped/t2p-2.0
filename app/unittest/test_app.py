@@ -4,12 +4,16 @@ import sys
 from unittest.mock import MagicMock, patch
 import app.backend.config as config
 import requests
+from modeltransformer import ModelTransformer
+import importlib.util
+import os
 
-from app.backend.app import app
-from app.backend.modeltransformer import ModelTransformer
+spec = importlib.util.spec_from_file_location("flask_app_module", os.path.abspath("app/backend/app.py"))
+flask_app_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(flask_app_module)
 
-# Add the app/backend directory to the Python path.
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../backend')))
+flask_app = flask_app_module.app
+
 
 # The following is the test for the app.py file.
 class TestApp(unittest.TestCase):
@@ -21,7 +25,7 @@ class TestApp(unittest.TestCase):
         """
         Set up the test client.
         """
-        self.app = app.test_client()
+        self.app = flask_app.test_client()
         self.app.testing = True
 
     def test_test_connection(self):
@@ -47,10 +51,10 @@ class TestApp(unittest.TestCase):
         response = self.app.post('/api_call', data="This is not json", content_type='text/plain')
         self.assertEqual(response.status_code, 500)
 
-    @patch('app.backend.gpt_process.ApiCaller')
-    @patch('app.backend.modeltransformer.ModelTransformer.transform')
+    @patch('gpt_process.ApiCaller')
+    @patch('modeltransformer.ModelTransformer.transform')
     def test_api_call_success(self, mock_transform, mock_api_caller):
-        """
+        """ 
         Test the /api_call endpoint with valid input and a successful transformation.
         """
         mock_api_caller.return_value.conversion_pipeline.return_value = "Mocked BPMN output"
