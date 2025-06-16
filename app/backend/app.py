@@ -22,7 +22,7 @@ def api_call():
 
 @app.route("/generate_BPMN", methods=["POST"])
 def generateBPMN():
-    return HandleCall.handle(app, {"direction": ""})
+    return HandleCall.handle(app, {"direction": "pnmltobpmn"})
 
 
 @app.route("/generate_PNML", methods=["POST"])
