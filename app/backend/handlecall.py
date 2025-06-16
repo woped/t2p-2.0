@@ -36,7 +36,8 @@ class HandleCall:
             # This part could also raise exceptions.
             # Consider specific error handling for conversion_pipeline if needed.
             result_bpmn = ac.conversion_pipeline(data["text"])
-
+            if directionParams.get("direction") == "":
+                return jsonify({"result": result_bpmn}), 200
             # Call the transform method, which might raise exceptions
             transformed_xml = transformer.transform(result_bpmn, directionParams)
 
