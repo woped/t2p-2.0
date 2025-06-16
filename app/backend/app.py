@@ -1,7 +1,21 @@
-from flask import Flask, jsonify
+import os
+
+from flask import Flask, jsonify, send_from_directory
+from flask_swagger_ui import get_swaggerui_blueprint
+
 from handlecall import HandleCall
 
 app = Flask(__name__)
+
+SWAGGER_URL = '/swagger'
+API_URL = '/backend/swagger.yaml'
+swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
+app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
+
+# Serve the swagger.yaml file explicitly
+@app.route('/backend/swagger.yaml')
+def serve_swagger_yaml():
+    return send_from_directory(os.path.dirname(__file__), 'swagger.yaml')
 
 
 @app.route("/test_connection", methods=["GET"])
