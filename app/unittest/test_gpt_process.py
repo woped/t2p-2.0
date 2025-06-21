@@ -2,11 +2,11 @@ import unittest
 from unittest.mock import patch
 import os
 import sys
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../backend')))
-from backend.gpt_process import ApiCaller
+from gpt_process import ApiCaller
+from modeltransformer import ModelTransformer
 
 class TestApiCaller(unittest.TestCase):
-    @patch('backend.gpt_process.ApiCaller.call_api')
+    @patch('gpt_process.ApiCaller.call_api')
     def setUp(self, mock_call_api):
         """
         Set up the test for the ApiCaller class.
@@ -14,7 +14,7 @@ class TestApiCaller(unittest.TestCase):
         mock_call_api.return_value = 'mock_response'
         self.api_caller = ApiCaller('dummy_api_key')
 
-    @patch('backend.gpt_process.ApiCaller.call_api', return_value='mock_response')
+    @patch('gpt_process.ApiCaller.call_api', return_value='mock_response')
     def test_call_api(self, mock_call_api):
         """
         Test the call_api method with a successful API call. It should return the response.
@@ -23,7 +23,7 @@ class TestApiCaller(unittest.TestCase):
         self.assertEqual(response, 'mock_response')
         mock_call_api.assert_called_once_with('system_prompt', 'user_text')
 
-    @patch('backend.gpt_process.ApiCaller.call_api', side_effect=Exception('mock_exception'))
+    @patch('gpt_process.ApiCaller.call_api', side_effect=Exception('mock_exception'))
     def test_call_api_error(self, mock_call_api):
         """
         Test the call_api method with an exception. It should return the exception message.
