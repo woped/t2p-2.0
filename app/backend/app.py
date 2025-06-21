@@ -61,19 +61,7 @@ def api_call():
     finally:
         REQUEST_LATENCY.labels(method='POST', endpoint='/api_call').observe(time.time() - start_time)
 
-@app.route("/generate_BPMN", methods=["POST"])
-def generateBPMN():
-    start_time = time.time()
-    try:
-        logger.info("Generate BPMN endpoint called")
-        REQUEST_COUNT.labels(method='POST', endpoint='/generate_BPMN', status='200').inc()
-        return HandleCall.handle(app, {"direction": "bpmntopnml"})
-    except Exception as e:
-        logger.error("Generate BPMN failed", extra={"error": str(e)})
-        REQUEST_COUNT.labels(method='POST', endpoint='/generate_BPMN', status='500').inc()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        REQUEST_LATENCY.labels(method='POST', endpoint='/generate_BPMN').observe(time.time() - start_time)
+
 
 @app.route("/generate_PNML", methods=["POST"])
 def generatePNML():
@@ -88,6 +76,7 @@ def generatePNML():
         return jsonify({"error": str(e)}), 500
     finally:
         REQUEST_LATENCY.labels(method='POST', endpoint='/generate_PNML').observe(time.time() - start_time)
+
 
 @app.route("/_/_/echo")
 def echo():
