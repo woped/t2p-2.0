@@ -1,17 +1,27 @@
-import openai
 import json
 import requests
 from backend.xml_parser import json_to_bpmn
-from backend.config import PROMPTING_STRATEGIE, API_HOST, API_PORT
+from backend.config import PROMPTING_STRATEGIE, API_HOST, API_PORT, LLM_PROVIDER
 
 
 class ApiCaller:
     def __init__(self, api_key):
         self.api_key = api_key
-        # Construct the URL using config values
-        self.flask_app_url = f"https://{API_HOST}/llm-api-connector/call_openai"
+        self.base_url = f"https://{API_HOST}"
         if API_PORT != 443:
-            self.flask_app_url = f"https://{API_HOST}:{API_PORT}/llm-api-connector/call_openai"
+            self.base_url += f":{API_PORT}"
+
+        self.endpoint = self._resolve_endpoint(LLM_PROVIDER)
+        self.flask_app_url = f"{self.base_url}/llm-api-connector/{self.endpoint}"
+
+    def _resolve_endpoint(self, provider):
+        match provider:
+            case "openai":
+                return "call_openai"
+            case "gemini":
+                return "call_gemini"
+            case _:
+                raise ValueError(f"Unsupported LLM provider: {provider}")
 
     def call_api(self, user_text):
         data_payload = {
