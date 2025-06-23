@@ -2,16 +2,16 @@ import unittest
 import os
 from backend.gpt_process import ApiCaller
 
-class TestApiCallerRealApi(unittest.TestCase):
+class TestApiCaller(unittest.TestCase):
 
     def setUp(self):
         # These values must match the running instance of the API server
         os.environ["API_HOST"] = "localhost"
         os.environ["API_PORT"] = "5000"
-        os.environ["LLM_PROVIDER"] = "openai"  # or "gemini"
+        os.environ["LLM_PROVIDER"] = "openai"  
         os.environ["PROMPTING_STRATEGIE"] = "few_shot"
 
-        self.api_key = os.getenv("API_KEY", "dummy-key")  # can be defined in a .env file
+        self.api_key = os.getenv("API_KEY", "dummy-key")  
         self.api_caller = ApiCaller(api_key=self.api_key)
 
     def test_openai_api_call(self):

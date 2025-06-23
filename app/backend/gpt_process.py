@@ -1,7 +1,7 @@
 import json
 import requests
-from backend.xml_parser import json_to_bpmn
-from backend.config import PROMPTING_STRATEGIE, API_HOST, API_PORT, LLM_PROVIDER
+from app.backend.xml_parser import json_to_bpmn
+from app.backend.config import PROMPTING_STRATEGIE, API_HOST, API_PORT, LLM_PROVIDER
 
 
 class ApiCaller:
