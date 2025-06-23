@@ -3,7 +3,8 @@ import os
 from flask import Flask, jsonify, send_from_directory
 from flask_swagger_ui import get_swaggerui_blueprint
 
-from handlecall import HandleCall
+from ..backend.handlecall import HandleCall
+
 
 app = Flask(__name__)
 

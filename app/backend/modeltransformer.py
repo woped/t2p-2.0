@@ -1,7 +1,7 @@
 import json
 import logging
 
-import config
+from app.backend import config
 import requests
 from json2xml import json2xml
 
