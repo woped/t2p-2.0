@@ -1,6 +1,6 @@
 import unittest
 import os
-from backend.gpt_process import ApiCaller
+from app.backend.gpt_process import ApiCaller
 
 class TestApiCaller(unittest.TestCase):
 
@@ -11,16 +11,24 @@ class TestApiCaller(unittest.TestCase):
         os.environ["LLM_PROVIDER"] = "openai"  
         os.environ["PROMPTING_STRATEGIE"] = "few_shot"
 
-        self.api_key = os.getenv("API_KEY", "dummy-key")  
+        self.api_key = os.getenv("API_KEY", "dummy_api_key")  
         self.api_caller = ApiCaller(api_key=self.api_key)
+
 
     def test_openai_api_call(self):
         """Integration test for real /call_openai endpoint"""
         os.environ["LLM_PROVIDER"] = "openai"
-        result = self.api_caller.call_api("A simple description of a business process.")
+        prompt = "A simple description of a business process."
+        result = self.api_caller.call_api(prompt)
+
+        # Debug output to inspect API response
+        print("\n====== API Response ======")
+        print(result)
+        print("==========================\n")
+
         self.assertIsInstance(result, str)
         self.assertTrue("events" in result or "An error occurred" in result)
-
+    
     def test_gemini_api_call(self):
         """Integration test for real /call_gemini endpoint"""
         os.environ["LLM_PROVIDER"] = "gemini"

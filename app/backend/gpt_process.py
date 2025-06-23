@@ -7,10 +7,12 @@ from app.backend.config import PROMPTING_STRATEGIE, API_HOST, API_PORT, LLM_PROV
 class ApiCaller:
     def __init__(self, api_key):
         self.api_key = api_key
-        self.base_url = f"https://{API_HOST}"
-        if API_PORT != 443:
-            self.base_url += f":{API_PORT}"
 
+        # Use HTTPS only if standard secure port 443 is used
+        protocol = "https" if API_PORT == 443 else "http"
+        self.base_url = f"{protocol}://{API_HOST}:{API_PORT}"
+
+        # Determine endpoint for the selected LLM provider
         self.endpoint = self._resolve_endpoint(LLM_PROVIDER)
         self.flask_app_url = f"{self.base_url}/llm-api-connector/{self.endpoint}"
 
@@ -38,7 +40,7 @@ class ApiCaller:
                 response_data = response.json()
                 return response_data['message']
             else:
-                return f"An error occurred: {response.text}"
+                return f"An error occurred: {response.status_code} - {response.text}"
         except Exception as e:
             return f"An exception occurred: {str(e)}"
 
@@ -48,8 +50,7 @@ class ApiCaller:
             xml_data = json_to_bpmn(json.loads(json_data))
             return xml_data
         except Exception as e:
-            return f"An error occurred: {str(e)}"
+            return f"An error occurred during conversion: {str(e)}"
 
     def generate_bpmn_json(self, user_description):
-        json_output = self.call_api(user_text=user_description)
-        return json_output
+        return self.call_api(user_text=user_description)
