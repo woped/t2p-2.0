@@ -28,12 +28,12 @@ logger.addHandler(console_handler)
 app = Flask(__name__)
 
 SWAGGER_URL = '/swagger'
-API_URL = '/backend/swagger.yaml'
+API_URL = '/api/swagger.yaml'
 swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
 app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 
 # Serve the swagger.yaml file explicitly
-@app.route('/backend/swagger.yaml')
+@app.route('/api/swagger.yaml')
 def serve_swagger_yaml():
     return send_from_directory(os.path.dirname(__file__), 'swagger.yaml')
 
