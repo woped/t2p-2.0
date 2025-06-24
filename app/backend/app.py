@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from gpt_process import ApiCaller
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import time
@@ -6,7 +6,7 @@ from pythonjsonlogger import jsonlogger
 import logging
 import os
 from handlecall import HandleCall
-
+from flask_swagger_ui import get_swaggerui_blueprint
 # Prometheus Metriken
 REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
 REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'HTTP request latency', ['method', 'endpoint'])
@@ -39,6 +39,16 @@ def restore_logging(response):
     """Restore logging after request is processed."""
     app.logger.disabled = False
     return response
+
+SWAGGER_URL = '/swagger'
+API_URL = '/api/swagger.yaml'
+swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
+app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
+
+# Serve the swagger.yaml file explicitly
+@app.route('/api/swagger.yaml')
+def serve_swagger_yaml():
+    return send_from_directory(os.path.dirname(__file__), 'swagger.yaml')
 
 @app.route('/metrics')
 def metrics():
@@ -74,6 +84,10 @@ def api_call():
     finally:
         REQUEST_LATENCY.labels(method='POST', endpoint='/api_call').observe(time.time() - start_time)
 
+
+@app.route("/generate_BPMN", methods=["POST"])
+def generateBPMN():
+    return HandleCall.handle(app, {"direction": "bpmntopnml"})
 
 
 @app.route("/generate_PNML", methods=["POST"])

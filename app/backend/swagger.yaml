@@ -1,0 +1,232 @@
+openapi: 3.0.3
+info:
+  title: Flask Backend API
+  description: API for text-to-model transformation services
+  version: 1.0.0
+  contact:
+    name: API Support
+servers:
+  - url: http://localhost:5000
+    description: Local development server
+  - url: https://your-production-domain.com
+    description: Production server
+
+paths:
+  /test_connection:
+    get:
+      summary: Test API connection
+      description: Simple endpoint to verify the API is running
+      operationId: testConnection
+      tags:
+        - health
+      responses:
+        '200':
+          description: Connection successful
+          content:
+            application/json:
+              schema:
+                type: string
+                example: "Successful"
+        '500':
+          description: Test connection failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api_call:
+    post:
+      summary: Transform text to model (Deprecated)
+      description: |
+        **DEPRECATED**: This endpoint will be removed in future versions. 
+        Use `/generate_BPMN` or `/generate_PNML` instead.
+        Transforms natural language text into structured model format.
+      operationId: apiCall
+      deprecated: true
+      tags:
+        - transformation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransformRequest'
+      responses:
+        '200':
+          description: Transformation successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransformResponse'
+        '400':
+          description: Bad request - missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailedErrorResponse'
+
+  /generate_BPMN:
+    post:
+      summary: Generate BPMN model
+      description: Converts natural language process description to BPMN model format
+      operationId: generateBPMN
+      tags:
+        - transformation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransformRequest'
+      responses:
+        '200':
+          description: BPMN generation successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransformResponse'
+        '400':
+          description: Bad request - missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailedErrorResponse'
+
+  /generate_PNML:
+    post:
+      summary: Generate PNML model
+      description: Converts natural language process description to PNML model format
+      operationId: generatePNML
+      tags:
+        - transformation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransformRequest'
+      responses:
+        '200':
+          description: PNML generation successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransformResponse'
+        '400':
+          description: Bad request - missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailedErrorResponse'
+
+  /_/_/echo:
+    get:
+      summary: Echo endpoint
+      description: Simple echo endpoint that returns success status
+      operationId: echo
+      tags:
+        - utility
+      responses:
+        '200':
+          description: Echo successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+
+  /backend/swagger.yaml:
+    get:
+      summary: Get Swagger specification
+      description: Returns the OpenAPI specification file
+      operationId: getSwaggerSpec
+      tags:
+        - utility
+      responses:
+        '200':
+          description: Swagger specification file
+          content:
+            application/x-yaml:
+              schema:
+                type: string
+
+components:
+  schemas:
+    TransformRequest:
+      type: object
+      required:
+        - text
+        - api_key
+      properties:
+        text:
+          type: string
+          description: Natural language process description to be transformed into model format
+          example: "Start with user request. Check inventory. If available, process order. If not available, notify user. End process."
+        api_key:
+          type: string
+          description: API key for authentication
+          example: "sk-1234567890abcdef"
+
+    TransformResponse:
+      type: object
+      properties:
+        result:
+          type: string
+          description: The generated model in XML format
+          example: "<?xml version='1.0' encoding='UTF-8'?>..."
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+          example: "Missing data for: text, api_key"
+
+    DetailedErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+          example: "An unexpected internal server error occurred."
+        details:
+          type: object
+          properties:
+            type:
+              type: string
+              description: Error type classification
+              example: "InternalServerError"
+            message:
+              type: string
+              description: Detailed error message
+              example: "Could not connect to or get a response from the transformation service."
+
+tags:
+  - name: health
+    description: Health check endpoints
+  - name: transformation
+    description: Text-to-model transformation endpoints
+  - name: utility
+    description: Utility endpoints
