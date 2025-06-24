@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from gpt_process import ApiCaller
+from app.backend.gpt_process import ApiCaller
 
 app = Flask(__name__)
 # app.config['APPLICATION_ROOT'] = '/t2p-2.0'

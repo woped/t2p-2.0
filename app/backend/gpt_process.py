@@ -14,7 +14,7 @@ class ApiCaller:
 
         # Determine endpoint for the selected LLM provider
         self.endpoint = self._resolve_endpoint(LLM_PROVIDER)
-        self.flask_app_url = f"{self.base_url}/llm-api-connector/{self.endpoint}"
+        self.flask_app_url = f"{self.base_url}/{self.endpoint}"
 
     def _resolve_endpoint(self, provider):
         match provider:
