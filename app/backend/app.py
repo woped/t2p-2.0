@@ -5,7 +5,7 @@ import time
 from pythonjsonlogger import jsonlogger
 import logging
 import os
-from handlecall import HandleCall
+from ..backend.handlecall import HandleCall
 from flask_swagger_ui import get_swaggerui_blueprint
 # Prometheus Metriken
 REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])

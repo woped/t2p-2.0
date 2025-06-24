@@ -1,6 +1,6 @@
 import requests
 import json
-from xml_parser import json_to_bpmn
+from ..backend.xml_parser import json_to_bpmn
 
 class ApiCaller:
     def __init__(self, api_key):
