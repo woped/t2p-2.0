@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory
-from gpt_process import ApiCaller
+from ..backend.gpt_process import ApiCaller
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import time
 from pythonjsonlogger import jsonlogger
