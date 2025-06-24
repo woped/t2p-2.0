@@ -48,3 +48,20 @@ def test_conversion_pipeline_success(mock_post, api_caller):
     # Assert
     assert isinstance(result, str)
     assert "<?xml" in result or "<definitions" in result  # simple check on BPMN output
+
+@patch("app.backend.gpt_process.requests.post")
+def test_call_api_exception(mock_post, api_caller):
+    mock_post.side_effect = Exception("Fake API Exception")
+
+    result = api_caller.call_api("test_system_prompt", "test_user_text")
+
+    assert "An exception occurred" in result
+    assert "Fake API Exception" in result
+
+@patch.object(ApiCaller, 'generate_bpmn_json')
+def test_conversion_pipeline_exception(mock_generate_bpmn_json, api_caller):
+    mock_generate_bpmn_json.return_value = "INVALID_JSON"
+
+    result = api_caller.conversion_pipeline("Bad process description")
+    
+    assert "An error occurred" in result
