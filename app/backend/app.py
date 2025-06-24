@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_from_directory
-from app.backend.gpt_process import ApiCaller
+from gpt_process import ApiCaller
 from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import time
 from pythonjsonlogger import jsonlogger
@@ -7,6 +7,7 @@ import logging
 import os
 from handlecall import HandleCall
 from flask_swagger_ui import get_swaggerui_blueprint
+
 # Prometheus Metriken
 REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
 REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'HTTP request latency', ['method', 'endpoint'])

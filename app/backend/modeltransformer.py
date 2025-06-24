@@ -1,6 +1,5 @@
 import json
 import logging
-
 import config
 import requests
 from json2xml import json2xml
