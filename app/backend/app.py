@@ -27,6 +27,19 @@ logger.addHandler(console_handler)
 
 app = Flask(__name__)
 
+@app.before_request
+def suppress_metrics_logging():
+    """Suppress logging for /metrics endpoint to avoid log spam."""
+    if request.path == '/metrics':
+        # Disable logging for this request
+        app.logger.disabled = True
+
+@app.after_request
+def restore_logging(response):
+    """Restore logging after request is processed."""
+    app.logger.disabled = False
+    return response
+
 SWAGGER_URL = '/swagger'
 API_URL = '/api/swagger.yaml'
 swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
@@ -36,7 +49,6 @@ app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 @app.route('/api/swagger.yaml')
 def serve_swagger_yaml():
     return send_from_directory(os.path.dirname(__file__), 'swagger.yaml')
-
 
 @app.route('/metrics')
 def metrics():
