@@ -1,7 +1,5 @@
 import json
 import logging
-
-#from app.backend import config
 import config
 import requests
 from json2xml import json2xml
