@@ -87,13 +87,13 @@ First install the requirements, see section "Setting Up Your Local Environment" 
 To run all the tests, use the following command:
 
 ```bash
-coverage run -m unittest discover unittest
+pytest -v
 ```
 
 To see the coverage report, use the following command:
 
 ```bash
-coverage report -m
+pytest --cov=app --cov-report=term-missing -v
 ```
 
 If you want to see the coverage report in html format, use the following command:
