@@ -33,7 +33,7 @@ class HandleCall:
 
             ac = ApiCaller(
                 api_key=data["api_key"],
-                prompting_strategie=approach,
+                prompting_strategy=approach,
                 llm_provider=llm_provider
             )
 

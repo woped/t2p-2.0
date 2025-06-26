@@ -1,13 +1,17 @@
 import json
 import requests
-from xml_parser import json_to_bpmn
-from config import API_HOST, API_PORT
+try:
+    from .xml_parser import json_to_bpmn
+    from .config import API_HOST, API_PORT
+except ImportError:
+    from xml_parser import json_to_bpmn
+    from config import API_HOST, API_PORT
 
 
 class ApiCaller:
-    def __init__(self, api_key, prompting_strategie=None, llm_provider=None):
+    def __init__(self, api_key, prompting_strategy=None, llm_provider=None):
         self.api_key = api_key
-        self.prompting_strategie = prompting_strategie
+        self.prompting_strategy = prompting_strategy
         self.llm_provider = llm_provider
 
         # Use HTTPS only if standard secure port 443 is used
@@ -31,7 +35,7 @@ class ApiCaller:
         data_payload = {
             "api_key": self.api_key,
             "user_text": user_text,
-            "prompting_strategie": self.prompting_strategie
+            "prompting_strategy": self.prompting_strategy
         }
         headers = {
             "Content-Type": "application/json"
