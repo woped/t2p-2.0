@@ -113,7 +113,83 @@ def json_to_bpmn(bpmn_data):
         'bpmnElement': 'Process_1'
     })
 
-    # Generate diagram elements for all visual elements (tasks, events, gateways)
+    # Generate diagram elements with improved positioning
+    def get_element_position(element_type, index):
+        """Calculate position based on element type and index."""
+        # Base positions and spacing
+        start_x = 50
+        start_y = 150
+        horizontal_spacing = 200
+        vertical_spacing = 120
+        
+        # Different Y positions for different element types
+        y_offsets = {
+            'startEvent': 0,
+            'endEvent': 0,
+            'task': 0,
+            'userTask': 0,
+            'serviceTask': 0,
+            'exclusiveGateway': -60,
+            'parallelGateway': -60
+        }
+        
+        # Calculate X position based on process flow order
+        x = start_x + (index * horizontal_spacing)
+        y = start_y + y_offsets.get(element_type, 0)
+        
+        return x, y
+    
+    def get_element_dimensions(element_type):
+        """Get appropriate width and height for different element types."""
+        dimensions = {
+            'startEvent': (36, 36),
+            'endEvent': (36, 36),
+            'task': (100, 80),
+            'userTask': (100, 80),
+            'serviceTask': (100, 80),
+            'exclusiveGateway': (50, 50),
+            'parallelGateway': (50, 50)
+        }
+        return dimensions.get(element_type, (100, 80))
+    
+    # Create a mapping of element flow order for better positioning
+    element_positions = {}
+    position_index = 0
+    
+    # Position start events first
+    for event in bpmn_data.get('events', []):
+        if event['type'] == 'startEvent':
+            x, y = get_element_position(event['type'], position_index)
+            element_positions[event['id']] = (x, y, event['type'])
+            position_index += 1
+    
+    # Position tasks and gateways based on flow sequence
+    flows = bpmn_data.get('flows', [])
+    processed_elements = set()
+    
+    # Build a simple flow graph to determine order
+    for flow in flows:
+        source_id = flow['source']
+        target_id = flow['target']
+        
+        if target_id not in processed_elements:
+            # Find the target element
+            target_element = None
+            for element_list in [bpmn_data.get('tasks', []), bpmn_data.get('gateways', []), bpmn_data.get('events', [])]:
+                for elem in element_list:
+                    if elem['id'] == target_id:
+                        target_element = elem
+                        break
+                if target_element:
+                    break
+            
+            if target_element and target_element['type'] != 'startEvent':
+                x, y = get_element_position(target_element['type'], position_index)
+                element_positions[target_id] = (x, y, target_element['type'])
+                processed_elements.add(target_id)
+                position_index += 1
+    
+    # Position any remaining elements that weren't caught in the flow
     all_elements = (
         bpmn_data.get('tasks', []) + 
         bpmn_data.get('events', []) + 
@@ -121,29 +197,65 @@ def json_to_bpmn(bpmn_data):
     )
     
     for element in all_elements:
+        if element['id'] not in element_positions:
+            x, y = get_element_position(element['type'], position_index)
+            element_positions[element['id']] = (x, y, element['type'])
+            position_index += 1
+    
+    # Create BPMN shapes with calculated positions
+    for element in all_elements:
+        x, y, element_type = element_positions[element['id']]
+        width, height = get_element_dimensions(element_type)
+        
         bpmn_shape = ET.SubElement(bpmn_plane, f"{{{ns['bpmndi']}}}BPMNShape", attrib={
             'id': f"{element['id']}_di", 
             'bpmnElement': element['id']
         })
-        # Default positioning - can be customized based on requirements
         ET.SubElement(bpmn_shape, f"{{{ns['dc']}}}Bounds", attrib={
-            'x': '100', 
-            'y': '100', 
-            'width': '100', 
-            'height': '80'
+            'x': str(x), 
+            'y': str(y), 
+            'width': str(width), 
+            'height': str(height)
         })
 
-    # Generate diagram elements for flows
+    # Generate diagram elements for flows with calculated waypoints
     for flow in bpmn_data.get('flows', []):
         bpmn_edge = ET.SubElement(bpmn_plane, f"{{{ns['bpmndi']}}}BPMNEdge", attrib={
             'id': f"{flow['id']}_di", 
             'bpmnElement': flow['id']
         })
-        # Default waypoints - can be customized based on actual element positions
-        waypoints = [
-            {'x': '120', 'y': '150'}, 
-            {'x': '250', 'y': '150'}
-        ]
+        
+        # Calculate waypoints based on source and target positions
+        source_id = flow['source']
+        target_id = flow['target']
+        
+        if source_id in element_positions and target_id in element_positions:
+            source_x, source_y, source_type = element_positions[source_id]
+            target_x, target_y, target_type = element_positions[target_id]
+            
+            # Calculate connection points (center-right of source to center-left of target)
+            source_width, source_height = get_element_dimensions(source_type)
+            target_width, target_height = get_element_dimensions(target_type)
+            
+            # Source waypoint (right edge, center)
+            source_waypoint_x = source_x + source_width
+            source_waypoint_y = source_y + (source_height // 2)
+            
+            # Target waypoint (left edge, center)
+            target_waypoint_x = target_x
+            target_waypoint_y = target_y + (target_height // 2)
+            
+            waypoints = [
+                {'x': str(source_waypoint_x), 'y': str(source_waypoint_y)}, 
+                {'x': str(target_waypoint_x), 'y': str(target_waypoint_y)}
+            ]
+        else:
+            # Fallback to default waypoints if positions not found
+            waypoints = [
+                {'x': '120', 'y': '150'}, 
+                {'x': '250', 'y': '150'}
+            ]
+        
         for waypoint in waypoints:
             ET.SubElement(bpmn_edge, f"{{{ns['di']}}}waypoint", attrib={
                 'x': waypoint['x'], 

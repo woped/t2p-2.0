@@ -40,7 +40,7 @@ class HandleCall:
             transformer = ModelTransformer()
             result_bpmn = ac.conversion_pipeline(data["text"])
 
-            if directionParams.get("direction") == "pnmltobpmn":
+            if directionParams.get("direction") == "bpmntopnml":
                 return jsonify({"result": result_bpmn}), 200
 
             transformed_xml = transformer.transform(result_bpmn, directionParams)
