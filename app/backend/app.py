@@ -104,7 +104,7 @@ def api_call():
 
 @app.route("/generate_BPMN", methods=["POST"])
 def generateBPMN():
-    return HandleCall.handle(app, {"direction": "bpmntopnml"})
+    return HandleCall.handle(app, {"direction": "pnmltobpmn"})
 
 
 @app.route("/generate_PNML", methods=["POST"])
@@ -113,7 +113,7 @@ def generatePNML():
     try:
         logger.info("Generate PNML endpoint called")
         REQUEST_COUNT.labels(method='POST', endpoint='/generate_PNML', status='200').inc()
-        return HandleCall.handle(app, {"direction": "pnmltobpmn"})
+        return HandleCall.handle(app, {"direction": "bpmntopnml"})
     except Exception as e:
         logger.error("Generate PNML failed", extra={"error": str(e)})
         REQUEST_COUNT.labels(method='POST', endpoint='/generate_PNML', status='500').inc()

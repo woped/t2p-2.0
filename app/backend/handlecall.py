@@ -27,9 +27,9 @@ class HandleCall:
                     jsonify({"error": f"Missing data for: {', '.join(missing_fields)}"}), 400
                 )
 
-            # Neu: Approach und Provider optional auslesen
+          
             approach = data.get("approach")
-            llm_provider = data.get("llm_provider", "openai")  # Default = openai
+            llm_provider = data.get("llm_provider", "openai")  
 
             ac = ApiCaller(
                 api_key=data["api_key"],
@@ -40,9 +40,11 @@ class HandleCall:
             transformer = ModelTransformer()
             result_bpmn = ac.conversion_pipeline(data["text"])
 
-            if directionParams.get("direction") == "bpmntopnml":
+            direction = directionParams.get("direction")
+            
+            if direction == "pnmltobpmn":
                 return jsonify({"result": result_bpmn}), 200
-
+            
             transformed_xml = transformer.transform(result_bpmn, directionParams)
             return jsonify({"result": transformed_xml}), 200
 
@@ -57,12 +59,9 @@ class HandleCall:
                     "type": "TransformerServiceError",
                     "message": "The transformation service responded with an error.",
                     "service_status_code": e_http.response.status_code,
+                    "service_response": e_http.response.text
                 },
             }
-            try:
-                error_payload["details"]["service_response"] = e_http.response.json()
-            except ValueError:
-                error_payload["details"]["service_response"] = e_http.response.text
 
             return jsonify(error_payload), 500
 
