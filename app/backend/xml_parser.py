@@ -3,11 +3,11 @@ import xml.etree.ElementTree as ET
 def json_to_bpmn(bpmn_data):
     # Define XML namespaces for BPMN 2.0
     ns = {
-        'bpmn': 'http://www.omg.org/spec/BPMN/20100524/MODEL',
-        'bpmndi': 'http://www.omg.org/spec/BPMN/20100524/DI',
-        'di': 'http://www.omg.org/spec/DD/20100524/DI',
-        'dc': 'http://www.omg.org/spec/DD/20100524/DC',
-        'xsi': "http://www.w3.org/2001/XMLSchema-instance"
+        'bpmn': 'https://www.omg.org/spec/BPMN/20100524/MODEL',
+        'bpmndi': 'https://www.omg.org/spec/BPMN/20100524/DI',
+        'di': 'https://www.omg.org/spec/DD/20100524/DI',
+        'dc': 'https://www.omg.org/spec/DD/20100524/DC',
+        'xsi': "https://www.w3.org/2001/XMLSchema-instance"
     }
     
     # Register namespaces to avoid ns0, ns1, etc. prefixes
@@ -19,7 +19,7 @@ def json_to_bpmn(bpmn_data):
 
     # Create root definitions element
     definitions = ET.Element(f"{{{ns['bpmn']}}}definitions", attrib={
-        f"{{{ns['xsi']}}}schemaLocation": "http://www.omg.org/spec/BPMN/20100524/MODEL BPMN20.xsd",
+        f"{{{ns['xsi']}}}schemaLocation": "https://www.omg.org/spec/BPMN/20100524/MODEL BPMN20.xsd",
         'targetNamespace': "http://example.bpmn.com/schema/bpmn"
     })
 
