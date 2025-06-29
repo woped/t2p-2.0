@@ -40,7 +40,6 @@ class HandleCall:
                 return jsonify({"result": result_bpmn}), 200
 
             transformed_xml = transformer.transform(result_bpmn, directionParams)
-
             return jsonify({"result": transformed_xml}), 200
 
         except requests.exceptions.HTTPError as e_http:

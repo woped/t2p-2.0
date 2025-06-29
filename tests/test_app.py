@@ -43,7 +43,7 @@ def test_generate_PNML_call(client):
     response = client.post('/generate_PNML', json={})
     assert response.status_code in (400, 500)
 
-@patch('app.backend.handlecall.HandleCall.handle', side_effect=Exception("Simulated Crash"))
+@patch('app.backend.app.HandleCall.handle', side_effect=Exception("Simulated Crash"))
 def test_api_call_exception(mock_handle, client):
     response = client.post('/api_call', json={"text": "example", "api_key": "key"})
     assert response.status_code == 500
