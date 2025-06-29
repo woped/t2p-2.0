@@ -16,5 +16,8 @@ EXPOSE 5000
 # Define environment variable if needed
 ENV NAME World
 
-# Run app.py when the container launches
-CMD ["python", "app/backend/app.py"]
+ENV FLASK_APP=app.backend.app:create_app
+ENV FLASK_RUN_HOST=0.0.0.0
+ENV FLASK_RUN_PORT=5000
+ENV PYTHONPATH=/app/app/backend
+CMD ["flask", "run"]

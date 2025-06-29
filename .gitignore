@@ -172,3 +172,4 @@ app/source/Scripts/python.exe
 app/source/Scripts/pythonw.exe
 app/test/bpmn_output.bpmn
 bpmn_output.bpmn
+app/backend/bpmn_output.bpmn
