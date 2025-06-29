@@ -90,7 +90,7 @@ def create_app():
         try:
             logging.info("API call received")
             REQUEST_COUNT.labels(method='POST', endpoint='/api_call', status='200').inc()
-            return HandleCall.handle(app, {"direction": "bpmntopnml"})
+            return HandleCall.handle(app, {"direction": "pnmltobpmn"})
         except Exception as e:
             logging.error("API call failed", extra={"error": str(e)})
             REQUEST_COUNT.labels(method='POST', endpoint='/api_call', status='500').inc()
@@ -100,7 +100,7 @@ def create_app():
 
     @app.route("/generate_BPMN", methods=["POST"])
     def generateBPMN():
-        return HandleCall.handle(app, {"direction": "bpmntopnml"})
+        return HandleCall.handle(app, {"direction": "pnmltobpmn"})
 
     @app.route("/generate_PNML", methods=["POST"])
     def generatePNML():
@@ -108,7 +108,7 @@ def create_app():
         try:
             logging.info("Generate PNML endpoint called")
             REQUEST_COUNT.labels(method='POST', endpoint='/generate_PNML', status='200').inc()
-            return HandleCall.handle(app, {"direction": "pnmltobpmn"})
+            return HandleCall.handle(app, {"direction": "bpmntopnml"})
         except Exception as e:
             logging.error("Generate PNML failed", extra={"error": str(e)})
             REQUEST_COUNT.labels(method='POST', endpoint='/generate_PNML', status='500').inc()
