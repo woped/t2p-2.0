@@ -1,12 +1,15 @@
 from flask import jsonify
 import pytest
-from app.backend.app import app
+from app.backend.app import create_app
 from unittest.mock import patch
 
 @pytest.fixture
 def client():
+    app = create_app()  
+    app.config['TESTING'] = True
     with app.test_client() as client:
         yield client
+
 
 def test_test_connection(client):
     response = client.get('/test_connection')
