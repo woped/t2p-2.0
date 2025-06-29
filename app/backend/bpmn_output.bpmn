@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_Studienanmeldung" targetNamespace="http://bpmn.io/schema/bpmn" exporter="bpmn-js (https://demo.bpmn.io)" exporterVersion="17.6.2">
+<bpmn:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_Studienanmeldung" targetNamespace="http://bpmn.io/schema/bpmn" exporter="bpmn-js (https://demo.bpmn.io)" exporterVersion="18.6.1">
   <bpmn:process id="Process_Studienanmeldung" isExecutable="false">
     <bpmn:startEvent id="StartEvent_AntragEingang" name="Studienantrag eingegangen">
       <bpmn:outgoing>Flow_ZurDokumentenpruefung</bpmn:outgoing>
@@ -26,39 +26,45 @@
   </bpmn:process>
   <bpmndi:BPMNDiagram id="BPMNDiagram_1">
     <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="Process_Studienanmeldung">
-      <bpmndi:BPMNShape id="_BPMNShape_StartEvent_2" bpmnElement="StartEvent_AntragEingang">
-        <dc:Bounds x="156" y="82" width="36" height="36" />
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="Activity_DokumentePruefen_di" bpmnElement="Activity_DokumentePruefen">
-        <dc:Bounds x="250" y="60" width="100" height="80" />
+      <bpmndi:BPMNShape id="Activity_Immatrikulieren_di" bpmnElement="Activity_Immatrikulieren">
+        <dc:Bounds x="720" y="80" width="100" height="80" />
         <bpmndi:BPMNLabel />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="Activity_ZulassungPruefen_di" bpmnElement="Activity_ZulassungPruefen">
-        <dc:Bounds x="400" y="60" width="100" height="80" />
+        <dc:Bounds x="510" y="80" width="100" height="80" />
         <bpmndi:BPMNLabel />
       </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="Activity_Immatrikulieren_di" bpmnElement="Activity_Immatrikulieren">
-        <dc:Bounds x="550" y="60" width="100" height="80" />
+      <bpmndi:BPMNShape id="Activity_DokumentePruefen_di" bpmnElement="Activity_DokumentePruefen">
+        <dc:Bounds x="310" y="80" width="100" height="80" />
         <bpmndi:BPMNLabel />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="_BPMNShape_StartEvent_2" bpmnElement="StartEvent_AntragEingang">
+        <dc:Bounds x="156" y="102" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="138" y="138" width="72" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="Event_AnmeldungAbgeschlossen_di" bpmnElement="Event_AnmeldungAbgeschlossen">
-        <dc:Bounds x="712" y="82" width="36" height="36" />
+        <dc:Bounds x="972" y="102" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="947" y="138" width="86" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="Flow_ZurDokumentenpruefung_di" bpmnElement="Flow_ZurDokumentenpruefung">
-        <di:waypoint x="192" y="100" />
-        <di:waypoint x="250" y="100" />
+        <di:waypoint x="192" y="120" />
+        <di:waypoint x="310" y="120" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="Flow_ZurZulassungspruefung_di" bpmnElement="Flow_ZurZulassungspruefung">
-        <di:waypoint x="350" y="100" />
-        <di:waypoint x="400" y="100" />
+        <di:waypoint x="410" y="120" />
+        <di:waypoint x="510" y="120" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="Flow_ZurImmatrikulation_di" bpmnElement="Flow_ZurImmatrikulation">
-        <di:waypoint x="500" y="100" />
-        <di:waypoint x="550" y="100" />
+        <di:waypoint x="610" y="120" />
+        <di:waypoint x="720" y="120" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="Flow_ZumAbschluss_di" bpmnElement="Flow_ZumAbschluss">
-        <di:waypoint x="650" y="100" />
-        <di:waypoint x="712" y="100" />
+        <di:waypoint x="820" y="120" />
+        <di:waypoint x="972" y="120" />
       </bpmndi:BPMNEdge>
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
