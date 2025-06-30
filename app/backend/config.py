@@ -37,5 +37,5 @@ config = get_runtime_config()
 
 API_HOST = config.API_HOST
 API_PORT = config.API_PORT
-TRANSFORMER_BASE_URL = ""
-OPENAI_BASE_URL = ""
+TRANSFORMER_BASE_URL = os.environ.get('TRANSFORMER_BASE_URL') or 'https://woped.dhbw-karlsruhe.de/pnml-bpmn-transformer'
+OPENAI_BASE_URL = os.environ.get('OPENAI_BASE_URL') or 'https://api.openai.com/v1'

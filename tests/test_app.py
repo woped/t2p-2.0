@@ -1,12 +1,15 @@
 from flask import jsonify
 import pytest
-from app.backend.app import app
+from app.backend.app import create_app
 from unittest.mock import patch
 
 @pytest.fixture
 def client():
+    app = create_app()  
+    app.config['TESTING'] = True
     with app.test_client() as client:
         yield client
+
 
 def test_test_connection(client):
     response = client.get('/test_connection')
@@ -40,7 +43,7 @@ def test_generate_PNML_call(client):
     response = client.post('/generate_PNML', json={})
     assert response.status_code in (400, 500)
 
-@patch('app.backend.handlecall.HandleCall.handle', side_effect=Exception("Simulated Crash"))
+@patch('app.backend.app.HandleCall.handle', side_effect=Exception("Simulated Crash"))
 def test_api_call_exception(mock_handle, client):
     response = client.post('/api_call', json={"text": "example", "api_key": "key"})
     assert response.status_code == 500
