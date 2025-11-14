@@ -1,7 +1,7 @@
 import requests
 from flask import jsonify, request
-from gpt_process import ApiCaller
-from modeltransformer import ModelTransformer
+from .gpt_process import ApiCaller
+from .modeltransformer import ModelTransformer
 
 
 class HandleCall:
