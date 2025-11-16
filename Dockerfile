@@ -1,20 +1,26 @@
 # Use an official Python runtime as a base image
 FROM python:3.13-slim
 
-ENV FLASK_APP flasky.py
-ENV FLASK_CONFIG production
+ENV FLASK_APP=flasky.py \
+    FLASK_CONFIG=production \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-RUN adduser -D flasky
-USER flasky
+RUN addgroup -S flasky && adduser -S -G flasky flasky
 
 WORKDIR /home/flasky
 
+# Requirements kopieren + installieren (als root)
 COPY requirements requirements
-RUN python -m venv venv
-RUN venv/bin/pip install -r requirements/docker.txt
+RUN python -m venv venv && venv/bin/pip install -r requirements/docker.txt
 
-COPY app app
-COPY flasky.py config.py boot.sh ./
+# App-Dateien kopieren (mit Ownership direkt setzen)
+COPY --chown=flasky:flasky app app
+COPY --chown=flasky:flasky llm-api-connector.py config.py boot.sh ./
+
+# Rechte setzen (noch root, oder direkt per COPY + Ausführbit gesetzt)
+RUN chmod 0750 boot.sh
+USER flasky
 
 # run-time configuration
 EXPOSE 5000
