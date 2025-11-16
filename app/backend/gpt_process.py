@@ -1,7 +1,4 @@
-import requests
-import json
-import logging
-import time
+import requests, json, logging, time
 from .xml_parser import json_to_bpmn
 from flask import current_app
 
