@@ -11,7 +11,7 @@ RUN addgroup -S flasky && adduser -S -G flasky flasky
 WORKDIR /home/flasky
 
 # Requirements kopieren + installieren (als root)
-COPY requirements requirements
+COPY --chown=flasky:flasky requirements requirements
 RUN python -m venv venv && venv/bin/pip install -r requirements/docker.txt
 
 # App-Dateien kopieren (mit Ownership direkt setzen)
