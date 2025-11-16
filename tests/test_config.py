@@ -1,7 +1,6 @@
 """
 Tests for configuration module
 """
-import pytest
 import os
 from config import (
     Config, 
