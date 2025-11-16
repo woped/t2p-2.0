@@ -16,7 +16,7 @@ jobs:
 
   testing_flask:
     with:
-      flask_app: llm-api-connector.py
+      flask_app: flasky.py
       flask_env: testing
     uses: woped/devops/.github/workflows/testing_flask.yaml@main
 

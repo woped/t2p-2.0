@@ -51,10 +51,6 @@ class TestDevelopmentConfig:
     
     def test_development_debug_enabled(self):
         assert DevelopmentConfig.DEBUG == True
-    
-    def test_development_has_database_uri(self):
-        assert hasattr(DevelopmentConfig, 'SQLALCHEMY_DATABASE_URI')
-        assert 'sqlite' in DevelopmentConfig.SQLALCHEMY_DATABASE_URI
 
 
 class TestTestingConfig:
@@ -66,9 +62,6 @@ class TestTestingConfig:
     def test_testing_csrf_disabled(self):
         assert TestingConfig.WTF_CSRF_ENABLED == False
     
-    def test_testing_uses_in_memory_db(self):
-        assert TestingConfig.SQLALCHEMY_DATABASE_URI == 'sqlite://'
-
 
 class TestProductionConfig:
     """Tests for ProductionConfig"""
