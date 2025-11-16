@@ -7,14 +7,20 @@ on:
     branches: [main, master]
 
 jobs:
+
   validate_commit_messages:
     uses: woped/devops/.github/workflows/validate-commit-msg.yaml@main
 
   linting:
     uses: woped/devops/.github/workflows/linting.yaml@main
-  testing_pytest:
-    uses: woped/devops/.github/workflows/testing_pytest.yaml@main
-  sonar_python:
-    needs: testing_pytest
-    uses: woped/devops/.github/workflows/sonar_python.yaml@main
-    secrets: inherit
+
+  testing_flask:
+    with:
+      flask_app: flasky.py
+      flask_env: testing
+    uses: woped/devops/.github/workflows/testing_flask.yaml@main
+
+  # sonar_flask:
+  #   needs: testing_flask
+  #   uses: woped/devops/.github/workflows/sonar_flask.yaml@main
+  #   secrets: inherit

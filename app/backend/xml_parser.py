@@ -1,6 +1,18 @@
 import xml.etree.ElementTree as ET
+import logging
+
+logger = logging.getLogger(__name__)
 
 def json_to_bpmn(bpmn_data):
+    logger.info(
+        "Converting BPMN JSON to XML",
+        extra={
+            "events": len(bpmn_data.get('events', [])) if isinstance(bpmn_data, dict) else None,
+            "tasks": len(bpmn_data.get('tasks', [])) if isinstance(bpmn_data, dict) else None,
+            "gateways": len(bpmn_data.get('gateways', [])) if isinstance(bpmn_data, dict) else None,
+            "flows": len(bpmn_data.get('flows', [])) if isinstance(bpmn_data, dict) else None,
+        },
+    )
     ns = {
         'bpmn': 'http://www.omg.org/spec/BPMN/20100524/MODEL',
         'bpmndi': 'http://www.omg.org/spec/BPMN/20100524/DI',
@@ -50,6 +62,8 @@ def json_to_bpmn(bpmn_data):
         waypoints = [{'x': '120', 'y': '150'}, {'x': '250', 'y': '150'}]  # Example waypoints, adjust based on actual positions
         for waypoint in waypoints:
             ET.SubElement(bpmn_edge, f"{{{ns['di']}}}waypoint", attrib={'x': waypoint['x'], 'y': waypoint['y']})
+    
+    logger.debug("BPMN XML generation complete")
 
     # Save the XML to a file
     tree = ET.ElementTree(definitions)

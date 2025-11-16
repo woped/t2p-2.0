@@ -1,23 +1,27 @@
 # Use an official Python runtime as a base image
 FROM python:3.13-slim
 
-# Set the working directory in the container to /app
-WORKDIR /app
+ENV FLASK_APP=flasky.py \
+    FLASK_CONFIG=production \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-# Copy the backend directory contents into the container at /app
-COPY . /app
+RUN addgroup -S flasky && adduser -S -G flasky flasky
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /home/flasky
 
-# Make port 5000 available to the world outside this container
+# Requirements kopieren + installieren (als root)
+COPY --chown=flasky:flasky requirements requirements
+RUN python -m venv venv && venv/bin/pip install -r requirements/docker.txt
+
+# App-Dateien kopieren (mit Ownership direkt setzen)
+COPY --chown=flasky:flasky app app
+COPY --chown=flasky:flasky llm-api-connector.py config.py boot.sh ./
+
+# Rechte setzen (noch root, oder direkt per COPY + Ausführbit gesetzt)
+RUN chmod 0750 boot.sh
+USER flasky
+
+# run-time configuration
 EXPOSE 5000
-
-# Define environment variable if needed
-ENV NAME World
-
-ENV FLASK_APP=app.backend.app:create_app
-ENV FLASK_RUN_HOST=0.0.0.0
-ENV FLASK_RUN_PORT=5000
-ENV PYTHONPATH=/app/app/backend
-CMD ["flask", "run"]
+ENTRYPOINT ["./boot.sh"]
