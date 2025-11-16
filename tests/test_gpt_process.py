@@ -4,7 +4,7 @@ from app.backend.gpt_process import ApiCaller
 
 @pytest.fixture
 def api_caller():
-    return ApiCaller(api_key="test_key")
+    return ApiCaller(api_key="test_key", llm_provider="openai", prompting_strategy="minimal")
 
 
 @patch("app.backend.gpt_process.requests.post")
@@ -14,7 +14,7 @@ def test_call_api_success(mock_post, api_caller):
     mock_post.return_value.json.return_value = {"message": "Fake GPT Response"}
 
     # Act
-    result = api_caller.call_api("test_system_prompt", "test_user_text")
+    result = api_caller.call_api("test_user_text")
 
     # Assert
     assert result == "Fake GPT Response"
@@ -28,7 +28,7 @@ def test_call_api_http_error(mock_post, api_caller):
     mock_post.return_value.text = "Internal Server Error"
 
     # Act
-    result = api_caller.call_api("test_system_prompt", "test_user_text")
+    result = api_caller.call_api("test_user_text")
 
     # Assert
     assert "An error occurred" in result
@@ -53,7 +53,7 @@ def test_conversion_pipeline_success(mock_post, api_caller):
 def test_call_api_exception(mock_post, api_caller):
     mock_post.side_effect = Exception("Fake API Exception")
 
-    result = api_caller.call_api("test_system_prompt", "test_user_text")
+    result = api_caller.call_api("test_user_text")
 
     assert "An exception occurred" in result
     assert "Fake API Exception" in result
