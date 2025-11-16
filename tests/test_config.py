@@ -30,10 +30,6 @@ class TestBaseConfig:
         assert hasattr(Config, 'T2P_LLM_API_CONNECTOR_URL')
         assert Config.T2P_LLM_API_CONNECTOR_URL is not None
     
-    def test_config_has_openai_url(self):
-        assert hasattr(Config, 'T2P_OPENAI_BASE_URL')
-        assert Config.T2P_OPENAI_BASE_URL is not None
-    
     def test_config_has_port_and_host(self):
         assert hasattr(Config, 'T2P_FLASK_PORT')
         assert hasattr(Config, 'T2P_FLASK_HOST')

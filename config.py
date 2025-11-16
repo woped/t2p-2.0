@@ -9,7 +9,6 @@ class Config:
     # App-specific URLs (use T2P prefix to distinguish custom settings)
     T2P_TRANSFORMER_BASE_URL = os.environ.get('TRANSFORMER_BASE_URL') or 'https://woped.dhbw-karlsruhe.de/pnml-bpmn-transformer'
     T2P_LLM_API_CONNECTOR_URL = os.environ.get('LLM_API_CONNECTOR_URL') or 'https://woped.dhbw-karlsruhe.de/llm-api-connector'
-    T2P_OPENAI_BASE_URL = os.environ.get('OPENAI_BASE_URL') or 'https://api.openai.com/v1'
     
     # Server configuration
     T2P_FLASK_PORT = int(os.environ.get('FLASK_PORT') or 5000)
