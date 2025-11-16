@@ -62,15 +62,25 @@ def create_app(config_name=None):
                 return True
 
     metrics_filter = MetricsFilter()
-    console_handler = logging.StreamHandler()
-    console_handler.addFilter(metrics_filter)
-    console_formatter = jsonlogger.JsonFormatter(
-        '%(asctime)s %(levelname)s %(name)s %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
-    werkzeug_logger.addHandler(console_handler)
+
+    if app.config.get('TESTING'):
+        # During tests on Windows, stdout/stderr can be invalid handles.
+        # Use NullHandler to avoid noisy OSErrors from logging.
+        logger.handlers = []
+        werkzeug_logger.handlers = []
+        null_handler = logging.NullHandler()
+        logger.addHandler(null_handler)
+        werkzeug_logger.addHandler(null_handler)
+    else:
+        console_handler = logging.StreamHandler()
+        console_handler.addFilter(metrics_filter)
+        console_formatter = jsonlogger.JsonFormatter(
+            '%(asctime)s %(levelname)s %(name)s %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        console_handler.setFormatter(console_formatter)
+        logger.addHandler(console_handler)
+        werkzeug_logger.addHandler(console_handler)
 
     @app.before_request
     def suppress_metrics_logging():

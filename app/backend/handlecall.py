@@ -25,7 +25,8 @@ class HandleCall:
             },
         )
         try:
-            data = request.json
+            # Use silent JSON parsing to avoid raising exceptions on bad content-type
+            data = request.get_json(silent=True)
             if not data:
                 HandleCall.logger.warning(
                     "Request body missing or not JSON",
@@ -110,11 +111,17 @@ class HandleCall:
                     "service_status_code": e_http.response.status_code,
                 },
             }
-            # Try to include parsed error from transformer if it's JSON
+            # Try to include parsed error from transformer if it's JSON.
+            # Be careful: in tests, response may be a Mock; ensure serializable.
             try:
-                error_payload["details"]["service_response"] = e_http.response.json()
-            except ValueError:
-                error_payload["details"]["service_response"] = e_http.response.text
+                service_response = e_http.response.json()
+            except Exception:
+                service_response = getattr(e_http.response, "text", str(e_http.response))
+
+            # Coerce non-serializable objects to string for safety
+            if not isinstance(service_response, (dict, list, str, int, float, bool, type(None))):
+                service_response = str(service_response)
+            error_payload["details"]["service_response"] = service_response
 
             HandleCall.logger.debug(
                 "HandleCall duration (HTTPError)",
