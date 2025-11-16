@@ -1,22 +1,25 @@
-from app import create_app
-from prometheus_client import Counter, Histogram
+from app import create_app, REQUEST_COUNT, REQUEST_LATENCY, API_CALL_DURATION
 import click
 import pytest
+import logging
 
-# Prometheus Metriken
-REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
-REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'HTTP request latency', ['method', 'endpoint'])
-API_CALL_DURATION = Histogram('api_call_duration_seconds', 'API call processing duration')
+logger = logging.getLogger(__name__)
 
+# Use the application-level Prometheus metrics defined in app.__init__ to avoid
+# registering the same metric names multiple times (which causes CollectorRegistry errors).
 app = create_app()
+logger.debug("Flask app created in flasky.py", extra={"app_name": app.name})
 
 
 @app.cli.command("test")
 @click.option('--cov', is_flag=True, help="Zeige Testabdeckung (Coverage).")
 def test_command(cov):
     """Führe alle Tests im Ordner 'tests/' aus."""
+    logger.info("Running test suite via CLI", extra={"coverage": bool(cov)})
     args = ["tests"]
     if cov:
         args += ["--cov=app", "--cov-report=term-missing"]
-    raise SystemExit(pytest.main(args))
+    result = pytest.main(args)
+    logger.info("Test suite finished", extra={"exit_code": result})
+    raise SystemExit(result)
 

@@ -1,19 +1,51 @@
 import logging
+import os
 from flask import Flask, request, jsonify, send_from_directory
 from .backend.gpt_process import ApiCaller
-from config import Config
+from config import config
 from flask_swagger_ui import get_swaggerui_blueprint
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
 from pythonjsonlogger import jsonlogger
 
-# Application-level Prometheus metrics
-REQUEST_COUNT = Counter('http_requests_total', 'Total HTTP requests', ['method', 'endpoint', 'status'])
-REQUEST_LATENCY = Histogram('http_request_duration_seconds', 'HTTP request latency', ['method', 'endpoint'])
-API_CALL_DURATION = Histogram('api_call_duration_seconds', 'API call processing duration')
 
-def create_app(config_class=Config):
+class _MetricProxy:
+    """Proxy object that forwards attribute access to the app-registered metric.
+
+    This allows modules to import REQUEST_COUNT (and others) at import-time while
+    deferring the actual metric creation until create_app() runs.
+    """
+    def __init__(self, key):
+        self._key = key
+
+    def _get(self):
+        from flask import current_app
+        try:
+            return current_app.extensions['metrics'][self._key]
+        except Exception:
+            raise RuntimeError(
+                f"Metric '{self._key}' is not initialized. Call create_app() first or access via current_app.extensions['metrics']."
+            )
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+    def __call__(self, *args, **kwargs):
+        return self._get()(*args, **kwargs)
+
+
+# Expose proxy objects so other modules can import them safely before the app is created.
+REQUEST_COUNT = _MetricProxy('REQUEST_COUNT')
+REQUEST_LATENCY = _MetricProxy('REQUEST_LATENCY')
+API_CALL_DURATION = _MetricProxy('API_CALL_DURATION')
+
+def create_app(config_name=None):
+    if config_name is None:
+        config_name = os.environ.get('FLASK_CONFIG') or 'default'
+    
     app = Flask(__name__)
-
+    app.config.from_object(config[config_name])
+    config[config_name].init_app(app)
+    
     # Logging Setup
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -51,12 +83,28 @@ def create_app(config_class=Config):
         return response
 
     from app.api import api_bp
-    app.register_blueprint(api_bp, url_prefix='/api')
+    app.register_blueprint(api_bp, url_prefix='')
 
     # Swagger UI
     SWAGGER_URL = '/swagger'
     API_URL = '/api/swagger.yaml'
     swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
     app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
+
+    # Create and register Prometheus metrics in the app context to avoid
+    # duplicate registration when modules are imported multiple times.
+    def _get_or_create(name, constructor, *args, **kwargs):
+        existing = REGISTRY._names_to_collectors.get(name)
+        if existing is not None:
+            return existing
+        return constructor(name, *args, **kwargs)
+
+    metrics = {
+        'REQUEST_COUNT': _get_or_create('http_requests_total', Counter, 'Total HTTP requests', ['method', 'endpoint', 'status']),
+        'REQUEST_LATENCY': _get_or_create('http_request_duration_seconds', Histogram, 'HTTP request latency', ['method', 'endpoint']),
+        'API_CALL_DURATION': _get_or_create('api_call_duration_seconds', Histogram, 'API call processing duration')
+    }
+    app.extensions = getattr(app, 'extensions', {})
+    app.extensions['metrics'] = metrics
 
     return app
