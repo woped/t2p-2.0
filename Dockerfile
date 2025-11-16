@@ -16,7 +16,7 @@ RUN python -m venv venv && venv/bin/pip install -r requirements/docker.txt
 
 # App-Dateien kopieren (mit Ownership direkt setzen)
 COPY --chown=flasky:flasky app app
-COPY --chown=flasky:flasky llm-api-connector.py config.py boot.sh ./
+COPY --chown=flasky:flasky flasky.py config.py boot.sh ./
 
 # Rechte setzen (noch root, oder direkt per COPY + Ausführbit gesetzt)
 RUN chmod 0750 boot.sh
