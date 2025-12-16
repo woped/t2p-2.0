@@ -2,7 +2,7 @@ import requests
 import json
 import logging
 import time
-from flask import current_app, json, logging
+from flask import current_app, json
 from .xml_parser import json_to_bpmn
 
 # Module-level logger for this module
