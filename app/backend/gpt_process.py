@@ -25,6 +25,7 @@ class ApiCaller:
         }
         try:
             # Make a POST request to the other API
+            # TODO: Check how verification should be handled in production
             logger.info("Calling LLM API connector", extra={"url": self.llm_api_connector_url})
             response = requests.post(self.llm_api_connector_url, headers=headers, json=data_payload, verify=False)
             duration = round(time.time() - start_time, 4)
