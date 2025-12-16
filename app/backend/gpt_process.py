@@ -26,7 +26,7 @@ class ApiCaller:
         try:
             # Make a POST request to the other API
             logger.info("Calling LLM API connector", extra={"url": self.llm_api_connector_url})
-            response = requests.post(self.llm_api_connector_url, headers=headers, json=data_payload)
+            response = requests.post(self.llm_api_connector_url, headers=headers, json=data_payload, verify=False)
             duration = round(time.time() - start_time, 4)
             logger.info("LLM API connector responded", extra={"status": response.status_code, "duration_seconds": duration})
             
