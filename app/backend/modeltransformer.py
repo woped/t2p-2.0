@@ -31,10 +31,7 @@ class ModelTransformer:
             }
         )
         
-        xml = bpmn_xml
-
         query_params = directionParams
-        request_body_data = {"bpmn": xml}
 
         try:
             logger.debug(
@@ -45,12 +42,28 @@ class ModelTransformer:
                     "timeout": 60
                 }
             )
-            response = requests.post(
-                self.transformer_url,
-                params=query_params,
-                data=request_body_data,  # Use 'data' for form-urlencoded body
-                timeout=60,  # Set a reasonable timeout (e.g., 60 seconds)
-            )
+            
+            # Send the bpmn_output.xml file as a file upload
+            with open('bpmn_output.xml', 'rb') as f:
+                logger.debug("Reading bpmn_output.xml file for upload")
+                request_files = {"bpmn": ("bpmn_output.xml", f, "application/xml")}
+                logger.debug(
+                    "Sending file as form-data",
+                    extra={
+                        "filename": "bpmn_output.xml",
+                        "field_name": "bpmn",
+                        "content_type": "application/xml",
+                        "file_size": f.seek(0, 2) if hasattr(f, 'seek') else None
+                    }
+                )
+                f.seek(0)  # Reset file pointer to beginning
+                response = requests.post(
+                    self.transformer_url,
+                    params=query_params,
+                    files=request_files,  # Use 'files' for multipart/form-data (file upload)
+                    timeout=60,  # Set a reasonable timeout (e.g., 60 seconds)
+                    verify=False,  # Disable SSL certificate verification
+                )
             
             duration = round(time.time() - start_time, 4)
             logger.info(
@@ -78,6 +91,18 @@ class ModelTransformer:
             logger.debug("PNML output preview", extra={"pnml_preview": pnml_output[:200] if isinstance(pnml_output, str) else None})
             return pnml_output
 
+        except FileNotFoundError as e_file:
+            # Handle case where bpmn_output.bpmn file does not exist
+            duration = round(time.time() - start_time, 4)
+            logger.error(
+                f"BPMN output file not found: {str(e_file)}",
+                extra={
+                    "duration_seconds": duration,
+                    "error_type": type(e_file).__name__
+                }
+            )
+            logger.exception("FileNotFoundError during transformation")
+            raise
         except requests.exceptions.HTTPError as e_http:
             # Log the detailed error from the transformer service
             duration = round(time.time() - start_time, 4)

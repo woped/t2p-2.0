@@ -170,6 +170,7 @@ app/source/Scripts/pip3.10.exe
 app/source/Scripts/pip3.exe
 app/source/Scripts/python.exe
 app/source/Scripts/pythonw.exe
-app/test/bpmn_output.bpmn
-bpmn_output.bpmn
-app/backend/bpmn_output.bpmn
+app/test/bpmn_output.xml
+bpmn_output.xml
+app/backend/bpmn_output.xml
+bpmn.xml
