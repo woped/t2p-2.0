@@ -1,5 +1,5 @@
 # Use an official Python runtime as a base image
-FROM python:3.13-alpine
+FROM python:3.14-alpine
 
 ENV FLASK_APP=flasky.py \
     FLASK_CONFIG=production \
