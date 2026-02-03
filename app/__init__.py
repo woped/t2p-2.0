@@ -1,6 +1,7 @@
 import logging
 import os
 from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
 from .backend.gpt_process import ApiCaller
 from config import config
 from flask_swagger_ui import get_swaggerui_blueprint
@@ -45,6 +46,9 @@ def create_app(config_name=None):
     app = Flask(__name__)
     app.config.from_object(config[config_name])
     config[config_name].init_app(app)
+    
+    # Configure CORS to allow all origins
+    CORS(app, resources={r"/*": {"origins": "*", "methods": ["POST", "GET", "OPTIONS"], "allow_headers": ["Content-Type"]}})
     
     # Logging Setup
     logger = logging.getLogger()

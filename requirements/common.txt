@@ -7,6 +7,7 @@ coverage==7.11.3
 dominate==2.9.1
 Flask==3.1.2
 Flask-Bootstrap==3.3.7.1
+Flask-CORS==4.0.0
 Flask-HTTPAuth==4.8.0
 Flask-Login==0.6.3
 Flask-Mail==0.10.0
