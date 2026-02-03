@@ -27,7 +27,7 @@ def json_to_bpmn(bpmn_data):
     ET.register_namespace('xsi', ns['xsi'])
 
     definitions = ET.Element(f"{{{ns['bpmn']}}}definitions", attrib={
-        f"{{{ns['xsi']}}}schemaLocation": "http://www.omg.org/spec/BPMN/20100524/MODEL BPMN20.xsd",
+        f"{{{ns['xsi']}}}schemaLocation": "http://www.omg.org/spec/BPMN/20100524/MODEL https://www.omg.org/spec/BPMN/20100501/BPMN20.xsd",
         'targetNamespace': "http://example.bpmn.com/schema/bpmn"
     })
 
@@ -39,10 +39,14 @@ def json_to_bpmn(bpmn_data):
         ET.SubElement(process, f"{{{ns['bpmn']}}}{event_type}", id=event['id'], name=event['name'])
 
     for task in bpmn_data['tasks']:
-        ET.SubElement(process, f"{{{ns['bpmn']}}}{task['type']}", id=task['id'], name=task['name'])
+        # Convert task type to camelCase (e.g., UserTask -> userTask)
+        task_type = task['type'][0].lower() + task['type'][1:] if task['type'] else task['type']
+        ET.SubElement(process, f"{{{ns['bpmn']}}}{task_type}", id=task['id'], name=task['name'])
 
     for gateway in bpmn_data['gateways']:
-        ET.SubElement(process, f"{{{ns['bpmn']}}}{gateway['type']}", id=gateway['id'], name=gateway['name'])
+        # Convert gateway type to camelCase (e.g., ParallelGateway -> parallelGateway)
+        gateway_type = gateway['type'][0].lower() + gateway['type'][1:] if gateway['type'] else gateway['type']
+        ET.SubElement(process, f"{{{ns['bpmn']}}}{gateway_type}", id=gateway['id'], name=gateway['name'])
 
     for flow in bpmn_data['flows']:
         ET.SubElement(process, f"{{{ns['bpmn']}}}sequenceFlow", id=flow['id'], sourceRef=flow['source'], targetRef=flow['target'])
@@ -68,7 +72,7 @@ def json_to_bpmn(bpmn_data):
     # Save the XML to a file
     tree = ET.ElementTree(definitions)
     ET.indent(tree, space="  ", level=0)
-    tree.write('bpmn_output.bpmn', encoding='utf-8', xml_declaration=True)
+    tree.write('bpmn_output.xml', encoding='utf-8', xml_declaration=True)
 
     bpmn_string = ET.tostring(definitions, encoding='utf-8', xml_declaration=True).decode('utf-8')
     
