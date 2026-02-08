@@ -43,27 +43,38 @@ class ModelTransformer:
                 }
             )
             
-            # Send the bpmn_output.xml file as a file upload
-            with open('bpmn_output.xml', 'rb') as f:
-                logger.debug("Reading bpmn_output.xml file for upload")
-                request_files = {"bpmn": ("bpmn_output.xml", f, "application/xml")}
+            # Read the bpmn_output.xml file as a string
+            with open('bpmn_output.xml', 'r', encoding='utf-8') as f:
+                bpmn_content = f.read()
                 logger.debug(
-                    "Sending file as form-data",
+                    "Reading bpmn_output.xml file as string",
                     extra={
                         "filename": "bpmn_output.xml",
-                        "field_name": "bpmn",
-                        "content_type": "application/xml",
-                        "file_size": f.seek(0, 2) if hasattr(f, 'seek') else None
+                        "content_length": len(bpmn_content)
                     }
                 )
-                f.seek(0)  # Reset file pointer to beginning
-                response = requests.post(
-                    self.transformer_url,
-                    params=query_params,
-                    files=request_files,  # Use 'files' for multipart/form-data (file upload)
-                    timeout=60,  # Set a reasonable timeout (e.g., 60 seconds)
-                    verify=False,  # Disable SSL certificate verification
-                )
+            
+            # Send the BPMN content as x-www-form-urlencoded
+            form_data = {"bpmn": bpmn_content}
+            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+            
+            logger.debug(
+                "Sending data as x-www-form-urlencoded",
+                extra={
+                    "field_name": "bpmn",
+                    "content_type": "application/x-www-form-urlencoded",
+                    "data_length": len(bpmn_content)
+                }
+            )
+            
+            response = requests.post(
+                self.transformer_url,
+                params=query_params,
+                data=form_data,  # Use 'data' for x-www-form-urlencoded
+                headers=headers,
+                timeout=60,  # Set a reasonable timeout (e.g., 60 seconds)
+                verify=False,  # Disable SSL certificate verification
+            )
             
             duration = round(time.time() - start_time, 4)
             logger.info(
