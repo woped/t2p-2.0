@@ -1,0 +1,7 @@
+2026-02-09
+- Added root-level version.py for service metadata and container tagging.
+- Updated CD workflow to use the Python Docker build workflow.
+- Refreshed README with current endpoints and setup steps.
+
+2026-02-01
+- Initial repository setup.
