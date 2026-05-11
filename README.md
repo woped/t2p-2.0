@@ -29,15 +29,24 @@ After cloning this repository, it's essential to [set up git hooks](https://gith
 
 To set up the local environment without docker, use these commands:
 
-- Create local environment:
+- Create and activate the local environment:
   From project root folder use:
   ```bash
-  python -m venv venv
-  source venv/bin/activate
+  # Windows
+  python -m venv .venv
+  .\.venv\Scripts\activate
+  
+  # Mac/Linux
+  python -m venv .venv
+  source .venv/bin/activate
   ```
 - Install the requirements:
   ```bash
   pip install -r requirements/dev.txt
+  ```
+- Run the Flask app locally:
+  ```bash
+  flask --app t2p run
   ```
 
 #### Running the Project as docker image
