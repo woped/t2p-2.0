@@ -12,7 +12,7 @@ logger.debug("Flask app created in flasky.py", extra={"app_name": app.name})
 
 
 @app.cli.command("test")
-@click.option('--cov', is_flag=True, help="Zeige Testabdeckung (Coverage).")
+@click.option("--cov", is_flag=True, help="Zeige Testabdeckung (Coverage).")
 def test_command(cov):
     """Führe alle Tests im Ordner 'tests/' aus."""
     logger.info("Running test suite via CLI", extra={"coverage": bool(cov)})
@@ -22,4 +22,3 @@ def test_command(cov):
     result = pytest.main(args)
     logger.info("Test suite finished", extra={"exit_code": result})
     raise SystemExit(result)
-

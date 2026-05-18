@@ -1,30 +1,32 @@
 """
 Shared pytest fixtures and configuration
 """
+
 import pytest
 import os
 import sys
 from unittest.mock import Mock
 
 # Add the project root to the path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 
-@pytest.fixture(scope='session')
+@pytest.fixture(scope="session")
 def app():
     """Create application for the tests."""
     from app import create_app
-    app = create_app('testing')
+
+    app = create_app("testing")
     return app
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def client(app):
     """Create a test client for the app."""
     return app.test_client()
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def runner(app):
     """Create a test runner for the app's Click commands."""
     return app.test_cli_runner()
@@ -34,21 +36,32 @@ def runner(app):
 def mock_llm_response():
     """Mock LLM API response"""
     import json
+
     return {
-        "message": json.dumps({
-            "events": [
-                {"id": "startEvent1", "type": "Start", "name": "Process Start"},
-                {"id": "endEvent1", "type": "End", "name": "Process End"}
-            ],
-            "tasks": [
-                {"id": "task1", "name": "Example Task", "type": "UserTask"}
-            ],
-            "gateways": [],
-            "flows": [
-                {"id": "flow1", "source": "startEvent1", "target": "task1", "type": "SequenceFlow"},
-                {"id": "flow2", "source": "task1", "target": "endEvent1", "type": "SequenceFlow"}
-            ]
-        })
+        "message": json.dumps(
+            {
+                "events": [
+                    {"id": "startEvent1", "type": "Start", "name": "Process Start"},
+                    {"id": "endEvent1", "type": "End", "name": "Process End"},
+                ],
+                "tasks": [{"id": "task1", "name": "Example Task", "type": "UserTask"}],
+                "gateways": [],
+                "flows": [
+                    {
+                        "id": "flow1",
+                        "source": "startEvent1",
+                        "target": "task1",
+                        "type": "SequenceFlow",
+                    },
+                    {
+                        "id": "flow2",
+                        "source": "task1",
+                        "target": "endEvent1",
+                        "type": "SequenceFlow",
+                    },
+                ],
+            }
+        )
     }
 
 
@@ -58,16 +71,24 @@ def sample_bpmn_json():
     return {
         "events": [
             {"id": "start1", "type": "Start", "name": "Start"},
-            {"id": "end1", "type": "End", "name": "End"}
+            {"id": "end1", "type": "End", "name": "End"},
         ],
-        "tasks": [
-            {"id": "task1", "name": "Task 1", "type": "UserTask"}
-        ],
+        "tasks": [{"id": "task1", "name": "Task 1", "type": "UserTask"}],
         "gateways": [],
         "flows": [
-            {"id": "flow1", "source": "start1", "target": "task1", "type": "SequenceFlow"},
-            {"id": "flow2", "source": "task1", "target": "end1", "type": "SequenceFlow"}
-        ]
+            {
+                "id": "flow1",
+                "source": "start1",
+                "target": "task1",
+                "type": "SequenceFlow",
+            },
+            {
+                "id": "flow2",
+                "source": "task1",
+                "target": "end1",
+                "type": "SequenceFlow",
+            },
+        ],
     }
 
 
@@ -92,7 +113,7 @@ def sample_bpmn_xml():
 @pytest.fixture
 def mock_transformer_response():
     """Mock transformer API response"""
-    return '<pnml><net>Transformed PNML</net></pnml>'
+    return "<pnml><net>Transformed PNML</net></pnml>"
 
 
 @pytest.fixture(autouse=True)

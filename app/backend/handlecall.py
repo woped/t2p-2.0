@@ -21,7 +21,9 @@ class HandleCall:
             "HandleCall.handle invoked",
             extra={
                 "endpoint": request.path if request else None,
-                "direction": directionParams.get("direction") if directionParams else None,
+                "direction": directionParams.get("direction")
+                if directionParams
+                else None,
             },
         )
         try:
@@ -71,7 +73,9 @@ class HandleCall:
             HandleCall.logger.info(
                 "conversion_pipeline completed",
                 extra={
-                    "bpmn_length": len(result_bpmn) if isinstance(result_bpmn, str) else None
+                    "bpmn_length": len(result_bpmn)
+                    if isinstance(result_bpmn, str)
+                    else None
                 },
             )
             if directionParams.get("direction") == "pnmltobpmn":
@@ -87,7 +91,9 @@ class HandleCall:
             HandleCall.logger.info(
                 "Transformation completed",
                 extra={
-                    "pnml_length": len(transformed_xml) if isinstance(transformed_xml, str) else None
+                    "pnml_length": len(transformed_xml)
+                    if isinstance(transformed_xml, str)
+                    else None
                 },
             )
             HandleCall.logger.debug(
@@ -116,10 +122,14 @@ class HandleCall:
             try:
                 service_response = e_http.response.json()
             except Exception:
-                service_response = getattr(e_http.response, "text", str(e_http.response))
+                service_response = getattr(
+                    e_http.response, "text", str(e_http.response)
+                )
 
             # Coerce non-serializable objects to string for safety
-            if not isinstance(service_response, (dict, list, str, int, float, bool, type(None))):
+            if not isinstance(
+                service_response, (dict, list, str, int, float, bool, type(None))
+            ):
                 service_response = str(service_response)
             error_payload["details"]["service_response"] = service_response
 
@@ -134,7 +144,9 @@ class HandleCall:
             app.logger.error(
                 f"Transformation service RequestException in /api_call: {str(e_req)}"
             )
-            HandleCall.logger.exception("RequestException contacting transformer service")
+            HandleCall.logger.exception(
+                "RequestException contacting transformer service"
+            )
             return (
                 jsonify(
                     {
