@@ -53,8 +53,11 @@ class TestConnectionEndpoint:
         assert response.status_code == 200
         assert response.json == "Successful"
 
-    @patch("app.api.routes.REQUEST_COUNT")
-    def test_connection_increments_counter(self, mock_counter, client):
+    def test_connection_increments_counter(self, app, client):
+        # Replace the metric through its registration seam rather than patching
+        # the import-time proxy, which can't resolve outside an app context.
+        mock_counter = Mock()
+        app.extensions["metrics"]["REQUEST_COUNT"] = mock_counter
         response = client.get("/test_connection")
         assert response.status_code == 200
         # Verify counter was incremented
@@ -195,9 +198,13 @@ class TestEchoEndpoint:
         assert response.status_code == 200
         assert response.json == {"success": True}
 
-    @patch("app.api.routes.REQUEST_COUNT")
-    @patch("app.api.routes.REQUEST_LATENCY")
-    def test_echo_increments_metrics(self, mock_latency, mock_counter, client):
+    def test_echo_increments_metrics(self, app, client):
+        # Replace the metrics through their registration seam rather than
+        # patching the import-time proxies (see test_connection_increments_counter).
+        mock_counter = Mock()
+        mock_latency = Mock()
+        app.extensions["metrics"]["REQUEST_COUNT"] = mock_counter
+        app.extensions["metrics"]["REQUEST_LATENCY"] = mock_latency
         response = client.get("/_/_/echo")
         assert response.status_code == 200
         # Verify metrics were updated
