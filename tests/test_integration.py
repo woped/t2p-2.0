@@ -125,6 +125,84 @@ class TestEndToEndBPMNGeneration:
 #         assert '<pnml>' in response.json['result']
 
 
+class TestConcurrentPNMLGeneration:
+    """Two concurrent /generate_pnml requests with different inputs must each
+    return their own result — regression test for the shared-file race (#43)."""
+
+    @patch("app.backend.gpt_process.requests.post")
+    def test_concurrent_requests_do_not_bleed(self, mock_post, app):
+        # gpt_process and modeltransformer share the same imported `requests`
+        # module, so a single patch covers both calls; dispatch by URL.
+        import threading
+        import time
+
+        def bpmn_json(marker):
+            return json.dumps(
+                {
+                    "events": [
+                        {"id": "start1", "type": "Start", "name": marker},
+                        {"id": "end1", "type": "End", "name": ""},
+                    ],
+                    "tasks": [{"id": "task1", "name": marker, "type": "UserTask"}],
+                    "gateways": [],
+                    "flows": [
+                        {
+                            "id": "flow1",
+                            "source": "start1",
+                            "target": "task1",
+                            "type": "SequenceFlow",
+                        },
+                        {
+                            "id": "flow2",
+                            "source": "task1",
+                            "target": "end1",
+                            "type": "SequenceFlow",
+                        },
+                    ],
+                }
+            )
+
+        def post_dispatch(*args, **kwargs):
+            url = args[0] if args else kwargs.get("url", "")
+            if "call_openai" in url:
+                marker = (
+                    "ALPHA" if "ALPHA" in kwargs["json"]["system_prompt"] else "BETA"
+                )
+                # Widen the window so a shared-file race would surface if present.
+                time.sleep(0.2)
+                resp = Mock()
+                resp.status_code = 200
+                resp.json.return_value = {"message": bpmn_json(marker)}
+                return resp
+            # transformer call: echo back which input's BPMN we received
+            bpmn = kwargs["data"]["bpmn"]
+            marker = "ALPHA" if "ALPHA" in bpmn else "BETA"
+            resp = Mock()
+            resp.status_code = 200
+            resp.text = json.dumps({"pnml": f"<pnml>{marker}</pnml>"})
+            resp.raise_for_status = Mock()
+            return resp
+
+        mock_post.side_effect = post_dispatch
+
+        results = {}
+
+        def run(marker):
+            response = app.test_client().post(
+                "/generate_pnml", json={"text": marker, "api_key": "k"}
+            )
+            results[marker] = response.get_json()["result"]
+
+        threads = [threading.Thread(target=run, args=(m,)) for m in ("ALPHA", "BETA")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert results["ALPHA"] == "<pnml>ALPHA</pnml>"
+        assert results["BETA"] == "<pnml>BETA</pnml>"
+
+
 class TestErrorHandling:
     """Tests for various error scenarios"""
 

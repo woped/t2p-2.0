@@ -50,16 +50,12 @@ class ModelTransformer:
                 },
             )
 
-            # Read the bpmn_output.xml file as a string
-            with open("bpmn_output.xml", "r", encoding="utf-8") as f:
-                bpmn_content = f.read()
-                logger.debug(
-                    "Reading bpmn_output.xml file as string",
-                    extra={
-                        "filename": "bpmn_output.xml",
-                        "content_length": len(bpmn_content),
-                    },
-                )
+            # Use the BPMN passed in memory to avoid the shared-file race (#43).
+            bpmn_content = bpmn_xml
+            logger.debug(
+                "Using in-memory BPMN content",
+                extra={"content_length": len(bpmn_content)},
+            )
 
             # Send the BPMN content as x-www-form-urlencoded
             form_data = {"bpmn": bpmn_content}
@@ -115,18 +111,6 @@ class ModelTransformer:
             )
             return pnml_output
 
-        except FileNotFoundError as e_file:
-            # Handle case where bpmn_output.bpmn file does not exist
-            duration = round(time.time() - start_time, 4)
-            logger.error(
-                f"BPMN output file not found: {str(e_file)}",
-                extra={
-                    "duration_seconds": duration,
-                    "error_type": type(e_file).__name__,
-                },
-            )
-            logger.exception("FileNotFoundError during transformation")
-            raise
         except requests.exceptions.HTTPError as e_http:
             # Log the detailed error from the transformer service
             duration = round(time.time() - start_time, 4)

@@ -137,10 +137,9 @@ def json_to_bpmn(bpmn_data):
 
     logger.debug("BPMN XML generation complete")
 
-    # Save the XML to a file
+    # Pretty-print in place and return the string; no file is written (#43).
     tree = ET.ElementTree(definitions)
     ET.indent(tree, space="  ", level=0)
-    tree.write("bpmn_output.xml", encoding="utf-8", xml_declaration=True)
 
     bpmn_string = ET.tostring(
         definitions, encoding="utf-8", xml_declaration=True
