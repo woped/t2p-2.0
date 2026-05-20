@@ -5,7 +5,13 @@ from flask_cors import CORS
 from .backend.gpt_process import ApiCaller
 from config import config
 from flask_swagger_ui import get_swaggerui_blueprint
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+from prometheus_client import (
+    Counter,
+    Histogram,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+    REGISTRY,
+)
 from pythonjsonlogger import jsonlogger
 
 
@@ -15,13 +21,15 @@ class _MetricProxy:
     This allows modules to import REQUEST_COUNT (and others) at import-time while
     deferring the actual metric creation until create_app() runs.
     """
+
     def __init__(self, key):
         self._key = key
 
     def _get(self):
         from flask import current_app
+
         try:
-            return current_app.extensions['metrics'][self._key]
+            return current_app.extensions["metrics"][self._key]
         except Exception:
             raise RuntimeError(
                 f"Metric '{self._key}' is not initialized. Call create_app() first or access via current_app.extensions['metrics']."
@@ -35,25 +43,35 @@ class _MetricProxy:
 
 
 # Expose proxy objects so other modules can import them safely before the app is created.
-REQUEST_COUNT = _MetricProxy('REQUEST_COUNT')
-REQUEST_LATENCY = _MetricProxy('REQUEST_LATENCY')
-API_CALL_DURATION = _MetricProxy('API_CALL_DURATION')
+REQUEST_COUNT = _MetricProxy("REQUEST_COUNT")
+REQUEST_LATENCY = _MetricProxy("REQUEST_LATENCY")
+API_CALL_DURATION = _MetricProxy("API_CALL_DURATION")
+
 
 def create_app(config_name=None):
     if config_name is None:
-        config_name = os.environ.get('FLASK_CONFIG') or 'default'
-    
+        config_name = os.environ.get("FLASK_CONFIG") or "default"
+
     app = Flask(__name__)
     app.config.from_object(config[config_name])
     config[config_name].init_app(app)
-    
+
     # Configure CORS to allow all origins
-    CORS(app, resources={r"/*": {"origins": "*", "methods": ["POST", "GET", "OPTIONS"], "allow_headers": ["Content-Type"]}})
-    
+    CORS(
+        app,
+        resources={
+            r"/*": {
+                "origins": "*",
+                "methods": ["POST", "GET", "OPTIONS"],
+                "allow_headers": ["Content-Type"],
+            }
+        },
+    )
+
     # Logging Setup
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    werkzeug_logger = logging.getLogger('werkzeug')
+    werkzeug_logger = logging.getLogger("werkzeug")
     werkzeug_logger.setLevel(logging.INFO)
 
     class MetricsFilter(logging.Filter):
@@ -61,13 +79,13 @@ def create_app(config_name=None):
             if record.name == "werkzeug":
                 return "/metrics" not in record.getMessage()
             try:
-                return not request.path.startswith('/metrics')
+                return not request.path.startswith("/metrics")
             except RuntimeError:
                 return True
 
     metrics_filter = MetricsFilter()
 
-    if app.config.get('TESTING'):
+    if app.config.get("TESTING"):
         # During tests on Windows, stdout/stderr can be invalid handles.
         # Use NullHandler to avoid noisy OSErrors from logging.
         logger.handlers = []
@@ -79,8 +97,8 @@ def create_app(config_name=None):
         console_handler = logging.StreamHandler()
         console_handler.addFilter(metrics_filter)
         console_formatter = jsonlogger.JsonFormatter(
-            '%(asctime)s %(levelname)s %(name)s %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
+            "%(asctime)s %(levelname)s %(name)s %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
         console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)
@@ -88,7 +106,7 @@ def create_app(config_name=None):
 
     @app.before_request
     def suppress_metrics_logging():
-        if request.path == '/metrics':
+        if request.path == "/metrics":
             app.logger.disabled = True
 
     @app.after_request
@@ -97,11 +115,12 @@ def create_app(config_name=None):
         return response
 
     from app.api import api_bp
-    app.register_blueprint(api_bp, url_prefix='')
+
+    app.register_blueprint(api_bp, url_prefix="")
 
     # Swagger UI
-    SWAGGER_URL = '/swagger'
-    API_URL = '/api/swagger.yaml'
+    SWAGGER_URL = "/swagger"
+    API_URL = "/api/swagger.yaml"
     swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
     app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 
@@ -114,11 +133,23 @@ def create_app(config_name=None):
         return constructor(name, *args, **kwargs)
 
     metrics = {
-        'REQUEST_COUNT': _get_or_create('http_requests_total', Counter, 'Total HTTP requests', ['method', 'endpoint', 'status']),
-        'REQUEST_LATENCY': _get_or_create('http_request_duration_seconds', Histogram, 'HTTP request latency', ['method', 'endpoint']),
-        'API_CALL_DURATION': _get_or_create('api_call_duration_seconds', Histogram, 'API call processing duration')
+        "REQUEST_COUNT": _get_or_create(
+            "http_requests_total",
+            Counter,
+            "Total HTTP requests",
+            ["method", "endpoint", "status"],
+        ),
+        "REQUEST_LATENCY": _get_or_create(
+            "http_request_duration_seconds",
+            Histogram,
+            "HTTP request latency",
+            ["method", "endpoint"],
+        ),
+        "API_CALL_DURATION": _get_or_create(
+            "api_call_duration_seconds", Histogram, "API call processing duration"
+        ),
     }
-    app.extensions = getattr(app, 'extensions', {})
-    app.extensions['metrics'] = metrics
+    app.extensions = getattr(app, "extensions", {})
+    app.extensions["metrics"] = metrics
 
     return app

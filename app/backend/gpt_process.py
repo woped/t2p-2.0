@@ -169,7 +169,7 @@ class ApiCaller:
                     "xml_length": len(xml_data) if isinstance(xml_data, str) else None,
                 },
             )
-            
+
             return xml_data
         except Exception as e:
             logger.exception("Error in conversion pipeline")
