@@ -2,7 +2,6 @@ import logging
 import os
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from .backend.gpt_process import ApiCaller
 from config import config
 from flask_swagger_ui import get_swaggerui_blueprint
 from prometheus_client import (
