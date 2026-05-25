@@ -129,7 +129,7 @@ def test_v1_health_ok(client):
 def test_deprecated_test_connection_has_headers(client):
     resp = client.get("/test_connection")
 
-    assert resp.status_code == 200  # behaviour unchanged
+    assert resp.status_code == 410
     assert resp.headers.get("Deprecation") == "true"
     assert "Sunset" in resp.headers
     assert "Link" in resp.headers
@@ -138,5 +138,5 @@ def test_deprecated_test_connection_has_headers(client):
 def test_deprecated_echo_has_headers(client):
     resp = client.get("/_/_/echo")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 410
     assert resp.headers.get("Deprecation") == "true"
