@@ -1,7 +1,11 @@
 import pytest
 from unittest.mock import patch
 from app import create_app
-from app.backend.connector_client import ConnectorClient, ConnectorError
+from app.backend.connector_client import (
+    ConnectorClient,
+    ConnectorError,
+    ConnectorClientError,
+)
 
 
 @pytest.fixture
@@ -69,7 +73,7 @@ def test_generate_sends_contract_request(mock_post, connector, app):
 
 
 @patch("app.backend.connector_client.requests.post")
-def test_generate_non_200_raises(mock_post, connector, app):
+def test_generate_5xx_raises_upstream_error(mock_post, connector, app):
     mock_post.return_value.status_code = 500
     mock_post.return_value.text = "Internal Server Error"
 
@@ -78,6 +82,23 @@ def test_generate_non_200_raises(mock_post, connector, app):
             connector.generate("Bearer t", "text", "openai", "gpt-4o")
 
     assert "status 500" in str(exc_info.value)
+
+
+@patch("app.backend.connector_client.requests.post")
+def test_generate_4xx_raises_client_error(mock_post, connector, app):
+    # A 4xx from the connector (e.g. invalid provider) is a relayable client
+    # error, not an upstream failure.
+    mock_post.return_value.status_code = 400
+    mock_post.return_value.json.return_value = {
+        "error": {"code": "invalid_provider", "message": "Unknown provider."}
+    }
+
+    with app.app_context():
+        with pytest.raises(ConnectorClientError) as exc_info:
+            connector.generate("Bearer t", "text", "bogus", "gpt-4o")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_body["error"]["code"] == "invalid_provider"
 
 
 @patch("app.backend.connector_client.requests.post")

@@ -10,11 +10,23 @@ DEFAULT_TIMEOUT = 60
 
 
 class ConnectorError(Exception):
-    """Raised when a call to the LLM API connector fails.
+    """Raised when the connector is unreachable or returns a server error.
 
-    The route layer catches this single type and maps it to an
-    ``upstream_error`` response, instead of handling raw ``requests`` errors.
+    The route layer maps this to an ``upstream_error`` response.
     """
+
+
+class ConnectorClientError(Exception):
+    """Raised when the connector rejects the request with a 4xx client error.
+
+    Carries the status and the connector's error body so the route layer can
+    relay them to the caller instead of masking them as an upstream failure.
+    """
+
+    def __init__(self, status_code, error_body=None):
+        self.status_code = status_code
+        self.error_body = error_body
+        super().__init__(f"connector returned {status_code}")
 
 
 class ConnectorClient:
@@ -66,6 +78,15 @@ class ConnectorClient:
         except requests.exceptions.RequestException as e:
             logger.exception("Connector /generate request failed")
             raise ConnectorError(f"Failed to reach the LLM API connector: {e}") from e
+
+        # Relay the connector's own client errors (4xx) so the caller can pass
+        # them through; treat 5xx / unreachable as an upstream failure.
+        if 400 <= response.status_code < 500:
+            try:
+                error_body = response.json()
+            except ValueError:
+                error_body = None
+            raise ConnectorClientError(response.status_code, error_body)
 
         if response.status_code != 200:
             logger.error(

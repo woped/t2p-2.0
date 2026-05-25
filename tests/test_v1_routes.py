@@ -1,5 +1,5 @@
 from unittest.mock import patch
-from app.backend.connector_client import ConnectorError
+from app.backend.connector_client import ConnectorError, ConnectorClientError
 
 
 AUTH = {"Authorization": "Bearer secret-token"}
@@ -87,6 +87,20 @@ def test_v1_generate_connector_error_returns_500(mock_cc, client):
 
     assert resp.status_code == 500
     assert resp.get_json()["error"]["code"] == "upstream_error"
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_v1_generate_relays_connector_4xx(mock_cc, client):
+    # A 4xx from the connector (its semantic validation) is relayed to the
+    # client with its status and body intact, not masked as 500.
+    mock_cc.return_value.generate.side_effect = ConnectorClientError(
+        400, {"error": {"code": "invalid_provider", "message": "Unknown provider 'x'."}}
+    )
+
+    resp = client.post("/v1/generate/bpmn", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]["code"] == "invalid_provider"
 
 
 # --- /v1/models -----------------------------------------------------------

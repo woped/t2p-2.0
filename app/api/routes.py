@@ -4,7 +4,11 @@ from functools import wraps
 from app.api import api_bp
 from app.__init__ import REQUEST_COUNT, REQUEST_LATENCY
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-from app.backend.connector_client import ConnectorClient, ConnectorError
+from app.backend.connector_client import (
+    ConnectorClient,
+    ConnectorError,
+    ConnectorClientError,
+)
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
@@ -147,6 +151,21 @@ def _v1_generate():
         logger.info("v1 generate completed", extra={"endpoint": endpoint_label})
         return jsonify({"result": raw_response}), 200
 
+    except ConnectorClientError as e:
+        # The connector rejected the request (e.g. invalid provider/model);
+        # relay its status and error body to the client unchanged.
+        status = str(e.status_code)
+        logger.info(
+            "Relaying connector client error",
+            extra={"endpoint": endpoint_label, "status": e.status_code},
+        )
+        if isinstance(e.error_body, dict) and "error" in e.error_body:
+            return jsonify(e.error_body), e.status_code
+        return _error_response(
+            e.status_code,
+            "invalid_request",
+            "The request was rejected by the LLM API connector.",
+        )
     except ConnectorError as e:
         status = "500"
         logger.error(
@@ -154,7 +173,7 @@ def _v1_generate():
             extra={"endpoint": endpoint_label, "error": str(e)},
         )
         return _error_response(
-            500, "upstream_error", "The LLM API connector could not be reached."
+            500, "upstream_error", "The LLM API connector is unavailable."
         )
     except Exception:
         status = "500"
