@@ -48,3 +48,17 @@ class TestCORSAndSecurity:
     def test_content_type_json(self, client):
         response = client.get("/test_connection")
         assert "application/json" in response.content_type
+
+    def test_cors_preflight_allows_authorization_header(self, client):
+        # The v1 endpoints require an Authorization header, so the CORS
+        # preflight must permit it for browser clients.
+        response = client.options(
+            "/v1/generate/bpmn",
+            headers={
+                "Origin": "http://example.com",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "Authorization",
+            },
+        )
+        allowed = response.headers.get("Access-Control-Allow-Headers", "")
+        assert "authorization" in allowed.lower()

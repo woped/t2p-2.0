@@ -62,7 +62,7 @@ def create_app(config_name=None):
             r"/*": {
                 "origins": "*",
                 "methods": ["POST", "GET", "OPTIONS"],
-                "allow_headers": ["Content-Type"],
+                "allow_headers": ["Content-Type", "Authorization"],
             }
         },
     )
