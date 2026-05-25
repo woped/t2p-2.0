@@ -1,0 +1,230 @@
+openapi: 3.0.3
+info:
+  title: WOPED T2P Orchestrator API
+  description: |
+    Text-to-model transformation service. The current API lives under the
+    `/v1` namespace. The unversioned legacy endpoints are deprecated and now
+    return `410 Gone`; clients should migrate to the `/v1` endpoints.
+  version: 1.0.0
+  contact:
+    name: API Support
+servers:
+  - url: http://localhost:5000
+    description: Local development server
+
+paths:
+  /v1/generate/bpmn:
+    post:
+      summary: Generate a BPMN model from a process description
+      operationId: v1GenerateBpmn
+      tags: [v1]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+      responses:
+        '200':
+          description: Generation successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/generate/pnml:
+    post:
+      summary: Generate a PNML model from a process description
+      operationId: v1GeneratePnml
+      tags: [v1]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GenerateRequest'
+      responses:
+        '200':
+          description: Generation successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResult'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/models:
+    get:
+      summary: List available providers and models
+      operationId: v1Models
+      tags: [v1]
+      responses:
+        '200':
+          description: Available models
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelsResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/health:
+    get:
+      summary: Liveness check
+      operationId: v1Health
+      tags: [v1]
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api_call:
+    post:
+      summary: Deprecated — use /v1/generate/bpmn
+      operationId: apiCallLegacy
+      deprecated: true
+      tags: [legacy]
+      responses:
+        '410':
+          $ref: '#/components/responses/Error'
+
+  /generate_bpmn:
+    post:
+      summary: Deprecated — use /v1/generate/bpmn
+      operationId: generateBpmnLegacy
+      deprecated: true
+      tags: [legacy]
+      responses:
+        '410':
+          $ref: '#/components/responses/Error'
+
+  /generate_pnml:
+    post:
+      summary: Deprecated — use /v1/generate/pnml
+      operationId: generatePnmlLegacy
+      deprecated: true
+      tags: [legacy]
+      responses:
+        '410':
+          $ref: '#/components/responses/Error'
+
+  /test_connection:
+    get:
+      summary: Deprecated — use /v1/health
+      operationId: testConnectionLegacy
+      deprecated: true
+      tags: [legacy]
+      responses:
+        '410':
+          $ref: '#/components/responses/Error'
+
+  /_/_/echo:
+    get:
+      summary: Deprecated — use /v1/health
+      operationId: echoLegacy
+      deprecated: true
+      tags: [legacy]
+      responses:
+        '410':
+          $ref: '#/components/responses/Error'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The LLM provider API key, sent as a bearer token.
+
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    GenerateRequest:
+      type: object
+      required: [text, provider, model]
+      properties:
+        text:
+          type: string
+          description: Natural-language process description.
+          example: "Start with a user request. Check inventory. If available, process the order; otherwise notify the user."
+        provider:
+          type: string
+          description: LLM provider; one of the values from GET /v1/models.
+          example: openai
+        model:
+          type: string
+          description: Model name; one of the values from GET /v1/models.
+          example: gpt-4o
+
+    GenerateResult:
+      type: object
+      properties:
+        result:
+          type: string
+          description: The generated model output.
+
+    ModelsResponse:
+      type: object
+      properties:
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+                example: openai
+              model:
+                type: string
+                example: gpt-4o
+              default:
+                type: boolean
+                example: true
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: invalid_request
+            message:
+              type: string
+              example: "Missing or empty field(s): provider."
+
+tags:
+  - name: v1
+    description: Current text-to-model transformation API
+  - name: legacy
+    description: Deprecated endpoints (return 410 Gone)
