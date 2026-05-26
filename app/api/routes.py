@@ -13,8 +13,9 @@ from app.backend.connector_client import (
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
 
-# Deprecation signaling headers (RFC 8594) shared by the deprecated endpoints.
-_DEPRECATION_SUNSET = "Wed, 31 Dec 2025 23:59:59 GMT"
+# Deprecation signaling headers shared by the deprecated endpoints. No Sunset
+# header: these endpoints already return 410 Gone, so a future sunset date would
+# contradict that. Deprecation + Link (migration target) remain.
 _DEPRECATION_LINK = (
     '<https://woped.dhbw-karlsruhe.de/docs/migration>; rel="deprecation"'
 )
@@ -27,7 +28,6 @@ def deprecated(view):
     def wrapper(*args, **kwargs):
         response = make_response(view(*args, **kwargs))
         response.headers.setdefault("Deprecation", "true")
-        response.headers.setdefault("Sunset", _DEPRECATION_SUNSET)
         response.headers.setdefault("Link", _DEPRECATION_LINK)
         return response
 

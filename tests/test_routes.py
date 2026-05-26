@@ -66,8 +66,9 @@ class TestDeprecatedEndpoints:
     def test_deprecation_headers_present(self, client):
         response = client.get("/test_connection")
         assert response.headers.get("Deprecation") == "true"
-        assert "Sunset" in response.headers
         assert "Link" in response.headers
+        # No Sunset header: the endpoint is already 410 Gone.
+        assert "Sunset" not in response.headers
 
     def test_deprecated_endpoint_increments_counter(self, app, client):
         # Replace the metric through its registration seam rather than patching

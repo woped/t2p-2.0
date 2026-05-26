@@ -145,7 +145,6 @@ def test_deprecated_test_connection_has_headers(client):
 
     assert resp.status_code == 410
     assert resp.headers.get("Deprecation") == "true"
-    assert "Sunset" in resp.headers
     assert "Link" in resp.headers
 
 
