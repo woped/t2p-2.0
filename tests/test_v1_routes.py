@@ -27,14 +27,36 @@ def test_v1_generate_bpmn_success(mock_cc, client):
     )
 
 
+@patch("app.api.routes.ModelTransformer")
 @patch("app.api.routes.ConnectorClient")
-def test_v1_generate_pnml_success(mock_cc, client):
-    mock_cc.return_value.generate.return_value = "RAW"
+def test_v1_generate_pnml_success(mock_cc, mock_mt, client):
+    # The connector returns BPMN; /pnml transforms it to PNML before returning.
+    mock_cc.return_value.generate.return_value = "BPMN"
+    mock_mt.return_value.transform.return_value = "PNML"
 
     resp = client.post("/v1/generate/pnml", json=BODY, headers=AUTH)
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"result": "RAW"}
+    assert resp.get_json() == {"result": "PNML"}
+    mock_mt.return_value.transform.assert_called_once_with(
+        "BPMN", {"direction": "bpmntopnml"}
+    )
+
+
+@patch("app.api.routes.ModelTransformer")
+@patch("app.api.routes.ConnectorClient")
+def test_v1_generate_pnml_transform_error_returns_500(mock_cc, mock_mt, client):
+    import requests
+
+    mock_cc.return_value.generate.return_value = "BPMN"
+    mock_mt.return_value.transform.side_effect = requests.exceptions.RequestException(
+        "transformer down"
+    )
+
+    resp = client.post("/v1/generate/pnml", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 500
+    assert resp.get_json()["error"]["code"] == "transform_error"
 
 
 @patch("app.api.routes.ConnectorClient")

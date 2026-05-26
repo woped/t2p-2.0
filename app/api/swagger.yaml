@@ -43,6 +43,11 @@ paths:
   /v1/generate/pnml:
     post:
       summary: Generate a PNML model from a process description
+      description: >-
+        The connector generates BPMN from the text; the result is then
+        transformed to PNML by the model-transformer service before it is
+        returned. A failure of the transformation step yields a 500 with
+        error code `transform_error`.
       operationId: v1GeneratePnml
       tags: [v1]
       security:

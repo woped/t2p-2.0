@@ -56,6 +56,7 @@ Error responses share the shape `{ "error": { "code": string, "message": string 
 | 401 | `unauthorized`     | missing or malformed bearer token |
 | 410 | `deprecated`       | a removed legacy endpoint was called |
 | 500 | `upstream_error`   | connector call failed (unreachable, timeout, non-200) |
+| 500 | `transform_error`  | the BPMN→PNML transformation service failed (`/v1/generate/pnml` only) |
 | 500 | `internal_error`   | unexpected error |
 
 ## Connector dependency
@@ -73,3 +74,8 @@ Response 200: { "raw_response": string }
 The client's `Authorization` header is forwarded unchanged; the request `text` is sent as
 `user_text`. The `provider`/`model` of a generate request are validated against the
 cached model list when available; otherwise validation is left to the connector.
+
+The connector always returns BPMN. `POST /v1/generate/bpmn` returns it unchanged.
+`POST /v1/generate/pnml` runs the connector's BPMN through the model-transformer
+service (`POST <transformer>/transform`, `direction=bpmntopnml`) and returns the
+resulting PNML; a transformer failure surfaces as `500 transform_error`.

@@ -4,11 +4,13 @@ from functools import wraps
 from app.api import api_bp
 from app.__init__ import REQUEST_COUNT, REQUEST_LATENCY
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+import requests
 from app.backend.connector_client import (
     ConnectorClient,
     ConnectorError,
     ConnectorClientError,
 )
+from app.backend.modeltransformer import ModelTransformer
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
@@ -111,11 +113,12 @@ def generatePNML():
 # --- v1 API ---------------------------------------------------------------
 
 
-def _v1_generate():
-    """Receive a v1 generate request, validate it, and forward it to the connector.
+def _v1_generate(target):
+    """Receive a v1 generate request, validate it, and produce the requested model.
 
-    BPMN and PNML diverge only in post-LLM processing, which is future work; in
-    this phase both endpoints forward identically and return the raw response.
+    The connector always returns BPMN. ``target == "bpmn"`` returns it unchanged;
+    ``target == "pnml"`` runs the connector's BPMN through the model transformer
+    (BPMN -> PNML) before returning. ``target`` is set by the route, not the client.
     """
     start_time = time.time()
     endpoint_label = request.path
@@ -148,8 +151,28 @@ def _v1_generate():
             provider=data["provider"],
             model=data["model"],
         )
+
+        if target == "pnml":
+            try:
+                result = ModelTransformer().transform(
+                    raw_response, {"direction": "bpmntopnml"}
+                )
+            except requests.exceptions.RequestException as e:
+                status = "500"
+                logger.error(
+                    "BPMN to PNML transformation failed",
+                    extra={"endpoint": endpoint_label, "error": str(e)},
+                )
+                return _error_response(
+                    500,
+                    "transform_error",
+                    "The BPMN to PNML transformation service failed.",
+                )
+        else:
+            result = raw_response
+
         logger.info("v1 generate completed", extra={"endpoint": endpoint_label})
-        return jsonify({"result": raw_response}), 200
+        return jsonify({"result": result}), 200
 
     except ConnectorClientError as e:
         # The connector rejected the request (e.g. invalid provider/model);
@@ -189,12 +212,12 @@ def _v1_generate():
 
 @api_bp.route("/v1/generate/bpmn", methods=["POST"])
 def v1_generate_bpmn():
-    return _v1_generate()
+    return _v1_generate("bpmn")
 
 
 @api_bp.route("/v1/generate/pnml", methods=["POST"])
 def v1_generate_pnml():
-    return _v1_generate()
+    return _v1_generate("pnml")
 
 
 @api_bp.route("/v1/models", methods=["GET"])
