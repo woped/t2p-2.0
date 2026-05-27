@@ -35,7 +35,7 @@ also remains functional until that date. Their responses include:
 ```
 Deprecation: @1780272000
 Sunset: Tue, 01 Dec 2026 00:00:00 GMT
-Link: <https://woped.dhbw-karlsruhe.de/docs/migration>; rel="deprecation"
+Link: </api/swagger.yaml>; rel="deprecation"
 ```
 
 | Method | Path | Migrate to |

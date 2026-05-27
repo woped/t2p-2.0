@@ -21,9 +21,7 @@ from app.backend.xml_parser import json_to_bpmn
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
 
-_DEPRECATION_LINK = (
-    '<https://woped.dhbw-karlsruhe.de/docs/migration>; rel="deprecation"'
-)
+_DEPRECATION_LINK = '</api/swagger.yaml>; rel="deprecation"'
 _LEGACY_DEPRECATION_DATE = "@1780272000"  # 2026-06-01T00:00:00Z
 _LEGACY_SUNSET_DATE = "Tue, 01 Dec 2026 00:00:00 GMT"
 _REMOVED_API_CALL_SUNSET_DATE = "Wed, 31 Dec 2025 23:59:59 GMT"

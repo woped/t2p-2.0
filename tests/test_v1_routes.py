@@ -179,7 +179,7 @@ def test_deprecated_test_connection_has_headers(client):
     assert resp.get_json() == "Successful"
     assert resp.headers.get("Deprecation") == "@1780272000"
     assert resp.headers.get("Sunset") == "Tue, 01 Dec 2026 00:00:00 GMT"
-    assert "Link" in resp.headers
+    assert resp.headers.get("Link") == '</api/swagger.yaml>; rel="deprecation"'
 
 
 def test_operational_echo_is_not_deprecated(client):

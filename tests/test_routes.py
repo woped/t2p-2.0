@@ -50,7 +50,7 @@ class TestDeprecatedEndpoints:
         assert response.get_json() == "Successful"
         assert response.headers.get("Deprecation") == "@1780272000"
         assert response.headers.get("Sunset") == "Tue, 01 Dec 2026 00:00:00 GMT"
-        assert "Link" in response.headers
+        assert response.headers.get("Link") == '</api/swagger.yaml>; rel="deprecation"'
 
     def test_deprecated_endpoint_increments_counter(self, app, client):
         # Replace the metric through its registration seam rather than patching
