@@ -44,7 +44,7 @@ def deprecated(view):
 
 
 def _error_response(status_code, code, message):
-    """Build the standard v1 error body: {"error": {"code", "message"}}."""
+    """Build the standard v2 error body: {"error": {"code", "message"}}."""
     return jsonify({"error": {"code": code, "message": message}}), status_code
 
 
@@ -66,7 +66,7 @@ def _removed_api_call_response():
         _error_response(
             410,
             "deprecated",
-            "This endpoint was removed after its sunset date; use the /v1 API.",
+            "This endpoint was removed after its sunset date; use the /v2 API.",
         )
     )
     response.headers["Sunset"] = _REMOVED_API_CALL_SUNSET_DATE
@@ -208,11 +208,11 @@ def generatePNML():
     return _legacy_generate("pnml")
 
 
-# --- v1 API ---------------------------------------------------------------
+# --- v2 API ---------------------------------------------------------------
 
 
-def _v1_generate(target):
-    """Receive a v1 generate request, validate it, and produce the requested model.
+def _v2_generate(target):
+    """Receive a v2 generate request, validate it, and produce the requested model.
 
     The connector returns an LLM BPMN structure which this service converts to
     BPMN XML. ``target == "pnml"`` then transforms that XML to PNML.
@@ -266,7 +266,7 @@ def _v1_generate(target):
         else:
             result = bpmn_xml
 
-        logger.info("v1 generate completed", extra={"endpoint": endpoint_label})
+        logger.info("v2 generate completed", extra={"endpoint": endpoint_label})
         return jsonify({"result": result}), 200
 
     except ConnectorClientError as e:
@@ -295,7 +295,7 @@ def _v1_generate(target):
         )
     except Exception:
         status = "500"
-        logger.exception("Unexpected error in v1 generate")
+        logger.exception("Unexpected error in v2 generate")
         return _error_response(500, "internal_error", "An unexpected error occurred.")
     finally:
         duration = time.time() - start_time
@@ -305,18 +305,18 @@ def _v1_generate(target):
         REQUEST_LATENCY.labels(method="POST", endpoint=endpoint_label).observe(duration)
 
 
-@api_bp.route("/v1/generate/bpmn", methods=["POST"])
-def v1_generate_bpmn():
-    return _v1_generate("bpmn")
+@api_bp.route("/v2/generate/bpmn", methods=["POST"])
+def v2_generate_bpmn():
+    return _v2_generate("bpmn")
 
 
-@api_bp.route("/v1/generate/pnml", methods=["POST"])
-def v1_generate_pnml():
-    return _v1_generate("pnml")
+@api_bp.route("/v2/generate/pnml", methods=["POST"])
+def v2_generate_pnml():
+    return _v2_generate("pnml")
 
 
-@api_bp.route("/v1/models", methods=["GET"])
-def v1_models():
+@api_bp.route("/v2/models", methods=["GET"])
+def v2_models():
     start_time = time.time()
     status = "200"
     try:
@@ -330,17 +330,17 @@ def v1_models():
         )
     except Exception:
         status = "500"
-        logger.exception("Unexpected error in v1 models")
+        logger.exception("Unexpected error in v2 models")
         return _error_response(500, "internal_error", "An unexpected error occurred.")
     finally:
         duration = time.time() - start_time
-        REQUEST_COUNT.labels(method="GET", endpoint="/v1/models", status=status).inc()
-        REQUEST_LATENCY.labels(method="GET", endpoint="/v1/models").observe(duration)
+        REQUEST_COUNT.labels(method="GET", endpoint="/v2/models", status=status).inc()
+        REQUEST_LATENCY.labels(method="GET", endpoint="/v2/models").observe(duration)
 
 
-@api_bp.route("/v1/health", methods=["GET"])
-def v1_health():
-    REQUEST_COUNT.labels(method="GET", endpoint="/v1/health", status="200").inc()
+@api_bp.route("/v2/health", methods=["GET"])
+def v2_health():
+    REQUEST_COUNT.labels(method="GET", endpoint="/v2/health", status="200").inc()
     return jsonify({"status": "ok"}), 200
 
 

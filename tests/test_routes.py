@@ -42,6 +42,7 @@ class TestDeprecatedEndpoints:
         response = client.post("/api_call", json={"text": "x", "api_key": "k"})
         assert response.status_code == 410
         assert response.get_json()["error"]["code"] == "deprecated"
+        assert "/v2 API" in response.get_json()["error"]["message"]
         assert response.headers.get("Sunset") == "Wed, 31 Dec 2025 23:59:59 GMT"
 
     def test_newly_deprecated_health_route_still_works_with_headers(self, client):

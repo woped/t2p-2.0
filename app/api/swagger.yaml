@@ -3,10 +3,10 @@ info:
   title: WOPED T2P Orchestrator API
   description: |
     Text-to-model transformation service. The current API lives under the
-    `/v1` namespace. Existing unversioned generation endpoints remain
+    `/v2` namespace. Existing unversioned generation endpoints remain
     functional during their deprecation period; clients should migrate to
-    `/v1`. The previously deprecated `/api_call` endpoint has been removed.
-  version: 1.0.0
+    `/v2`. The previously deprecated `/api_call` endpoint has been removed.
+  version: 2.0.0
   contact:
     name: API Support
 servers:
@@ -14,11 +14,11 @@ servers:
     description: Local development server
 
 paths:
-  /v1/generate/bpmn:
+  /v2/generate/bpmn:
     post:
       summary: Generate a BPMN model from a process description
-      operationId: v1GenerateBpmn
-      tags: [v1]
+      operationId: v2GenerateBpmn
+      tags: [v2]
       security:
         - bearerAuth: []
       requestBody:
@@ -41,7 +41,7 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 
-  /v1/generate/pnml:
+  /v2/generate/pnml:
     post:
       summary: Generate a PNML model from a process description
       description: >-
@@ -49,8 +49,8 @@ paths:
         converts it to BPMN XML and transforms it to PNML using the
         model-transformer service. A failure of the transformation step yields
         a 500 with error code `transform_error`.
-      operationId: v1GeneratePnml
-      tags: [v1]
+      operationId: v2GeneratePnml
+      tags: [v2]
       security:
         - bearerAuth: []
       requestBody:
@@ -73,11 +73,11 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 
-  /v1/models:
+  /v2/models:
     get:
       summary: List available providers and models
-      operationId: v1Models
-      tags: [v1]
+      operationId: v2Models
+      tags: [v2]
       responses:
         '200':
           description: Available models
@@ -88,11 +88,11 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 
-  /v1/health:
+  /v2/health:
     get:
       summary: Liveness check
-      operationId: v1Health
-      tags: [v1]
+      operationId: v2Health
+      tags: [v2]
       responses:
         '200':
           description: Service is up
@@ -103,7 +103,7 @@ paths:
 
   /api_call:
     post:
-      summary: Removed legacy operation; use /v1/generate/bpmn
+      summary: Removed legacy operation; use /v2/generate/bpmn
       operationId: apiCallLegacy
       deprecated: true
       tags: [legacy]
@@ -113,7 +113,7 @@ paths:
 
   /generate_bpmn:
     post:
-      summary: Deprecated compatibility operation; use /v1/generate/bpmn
+      summary: Deprecated compatibility operation; use /v2/generate/bpmn
       operationId: generateBpmnLegacy
       deprecated: true
       tags: [legacy]
@@ -137,7 +137,7 @@ paths:
 
   /generate_BPMN:
     post:
-      summary: Deprecated compatibility operation; use /v1/generate/bpmn
+      summary: Deprecated compatibility operation; use /v2/generate/bpmn
       operationId: generateBpmnLegacyUppercase
       deprecated: true
       tags: [legacy]
@@ -161,7 +161,7 @@ paths:
 
   /generate_pnml:
     post:
-      summary: Deprecated compatibility operation; use /v1/generate/pnml
+      summary: Deprecated compatibility operation; use /v2/generate/pnml
       operationId: generatePnmlLegacy
       deprecated: true
       tags: [legacy]
@@ -185,7 +185,7 @@ paths:
 
   /generate_PNML:
     post:
-      summary: Deprecated compatibility operation; use /v1/generate/pnml
+      summary: Deprecated compatibility operation; use /v2/generate/pnml
       operationId: generatePnmlLegacyUppercase
       deprecated: true
       tags: [legacy]
@@ -209,7 +209,7 @@ paths:
 
   /test_connection:
     get:
-      summary: Deprecated compatibility operation; use /v1/health
+      summary: Deprecated compatibility operation; use /v2/health
       operationId: testConnectionLegacy
       deprecated: true
       tags: [legacy]
@@ -258,11 +258,11 @@ components:
           example: "Start with a user request. Check inventory. If available, process the order; otherwise notify the user."
         provider:
           type: string
-          description: LLM provider; one of the values from GET /v1/models.
+          description: LLM provider; one of the values from GET /v2/models.
           example: openai
         model:
           type: string
-          description: Model name; one of the values from GET /v1/models.
+          description: Model name; one of the values from GET /v2/models.
           example: gpt-4o
 
     GenerateResult:
@@ -282,7 +282,7 @@ components:
           description: Natural-language process description.
         api_key:
           type: string
-          description: Deprecated body-based provider key; use bearer authentication in `/v1`.
+          description: Deprecated body-based provider key; use bearer authentication in `/v2`.
 
     LegacyError:
       type: object
@@ -330,7 +330,7 @@ components:
               example: "Missing or empty field(s): provider."
 
 tags:
-  - name: v1
+  - name: v2
     description: Current text-to-model transformation API
   - name: legacy
     description: Deprecated compatibility operations

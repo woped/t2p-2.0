@@ -8,22 +8,22 @@ spec wins.
 
 ## Endpoints
 
-The `/v1` namespace is the current API. See the spec for full schemas.
+The `/v2` namespace is the current API. See the spec for full schemas.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| POST | `/v1/generate/bpmn` | Generate a BPMN model from a process description |
-| POST | `/v1/generate/pnml` | Generate a PNML model from a process description |
-| GET  | `/v1/models`        | List available `provider`/`model` pairs (see below) |
-| GET  | `/v1/health`        | Shallow liveness check |
+| POST | `/v2/generate/bpmn` | Generate a BPMN model from a process description |
+| POST | `/v2/generate/pnml` | Generate a PNML model from a process description |
+| GET  | `/v2/models`        | List available `provider`/`model` pairs (see below) |
+| GET  | `/v2/health`        | Shallow liveness check |
 
-Operational and meta endpoints, outside the `/v1` contract: `GET /_/_/echo`,
+Operational and meta endpoints, outside the `/v2` contract: `GET /_/_/echo`,
 `GET /example`, `GET /api/swagger.yaml` (the spec), and `GET /metrics`
 (Prometheus).
 
 ### Deprecated endpoints
 
-`POST /api_call` was already deprecated before `/v1` was introduced and its
+`POST /api_call` was already deprecated before `/v2` was introduced and its
 announced sunset date, 31 December 2025, has elapsed. It returns `410 Gone`.
 
 The unversioned generation endpoints remain functional for compatibility until
@@ -40,12 +40,12 @@ Link: </api/swagger.yaml>; rel="deprecation"
 
 | Method | Path | Migrate to |
 |--------|------|------------|
-| GET  | `/test_connection` | `GET /v1/health` |
-| POST | `/api_call`        | `POST /v1/generate/bpmn` (removed; returns `410`) |
-| POST | `/generate_bpmn`, `/generate_BPMN` | `POST /v1/generate/bpmn` |
-| POST | `/generate_pnml`, `/generate_PNML` | `POST /v1/generate/pnml` |
+| GET  | `/test_connection` | `GET /v2/health` |
+| POST | `/api_call`        | `POST /v2/generate/bpmn` (removed; returns `410`) |
+| POST | `/generate_bpmn`, `/generate_BPMN` | `POST /v2/generate/bpmn` |
+| POST | `/generate_pnml`, `/generate_PNML` | `POST /v2/generate/pnml` |
 
-## `GET /v1/models`
+## `GET /v2/models`
 
 The model registry is owned by the connector; this endpoint proxies the connector's
 `GET /models`. If the connector is unreachable, this endpoint returns
@@ -64,7 +64,7 @@ Error responses share the shape `{ "error": { "code": string, "message": string 
 | 401 | `unauthorized`     | missing or malformed bearer token |
 | 410 | `deprecated`       | the already-sunset `/api_call` endpoint was called |
 | 500 | `upstream_error`   | connector call failed (unreachable, timeout, non-200) |
-| 500 | `transform_error`  | the BPMN→PNML transformation service failed (`/v1/generate/pnml` only) |
+| 500 | `transform_error`  | the BPMN→PNML transformation service failed (`/v2/generate/pnml` only) |
 | 500 | `internal_error`   | unexpected error |
 
 ## Connector dependency
@@ -92,8 +92,8 @@ XML markup in the LLM exchange. This is intended to reduce markup-related token
 overhead; the actual token reduction must be measured once that workflow is implemented.
 
 T2P owns conversion from the structured JSON process model to BPMN XML.
-`POST /v1/generate/bpmn` converts the JSON to BPMN XML and returns that BPMN.
-`POST /v1/generate/pnml` first converts the JSON to BPMN XML, then sends the XML
+`POST /v2/generate/bpmn` converts the JSON to BPMN XML and returns that BPMN.
+`POST /v2/generate/pnml` first converts the JSON to BPMN XML, then sends the XML
 to the model-transformer service (`POST <transformer>/transform`,
 `direction=bpmntopnml`) and returns the resulting PNML; a transformer failure
 surfaces as `500 transform_error`.
