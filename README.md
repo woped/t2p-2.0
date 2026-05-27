@@ -6,12 +6,13 @@ This repository contains a Flask-based web API for converting and transforming p
 
 ## Features
 
-- "/test_connection" Route - Connection test/health endpoint
-- "/generate_bpmn" and "/generate_BPMN" Routes - Generate BPMN output
-- "/generate_pnml" and "/generate_PNML" Routes - Generate PNML output
+- "/v1/health" Route - Current connection test/health endpoint
+- "/v1/generate/bpmn" and "/v1/generate/pnml" Routes - Current versioned generation API
+- "/test_connection", "/generate_bpmn", "/generate_BPMN", "/generate_pnml" and "/generate_PNML" Routes - Functional deprecated compatibility endpoints until 2026-12-01
+- "/_/_/echo" Route - Operational liveness endpoint
 - "/metrics" Route - Prometheus metrics endpoint
 - "/api/swagger.yaml" Route - Swagger/OpenAPI specification
-- "/api_call" Route - Deprecated endpoint for backward compatibility
+- "/api_call" Route - Removed endpoint after its 2025-12-31 sunset date
 
 ## Installation
 

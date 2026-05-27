@@ -10,19 +10,17 @@ def client():
         yield client
 
 
-# The legacy endpoints are sunset: routes still exist (not 404) but return 410.
-
-
 def test_test_connection(client):
     response = client.get("/test_connection")
-    assert response.status_code == 410
-    assert response.json["error"]["code"] == "deprecated"
+    assert response.status_code == 200
+    assert response.json == "Successful"
+    assert "Deprecation" in response.headers
 
 
 def test_echo(client):
     response = client.get("/_/_/echo")
-    assert response.status_code == 410
-    assert response.json["error"]["code"] == "deprecated"
+    assert response.status_code == 200
+    assert response.json == {"success": True}
 
 
 def test_metrics(client):
@@ -38,24 +36,25 @@ def test_api_call(client):
 
 def test_generate_BPMN_call(client):
     response = client.post("/generate_BPMN", json={})
-    assert response.status_code == 410
+    assert response.status_code == 400
+    assert "Deprecation" in response.headers
 
 
 def test_generate_PNML_call(client):
     response = client.post("/generate_PNML", json={})
-    assert response.status_code == 410
+    assert response.status_code == 400
 
 
 def test_generate_bpmn_lowercase_route(client):
-    """Lowercase /generate_bpmn route still exists (410, not 404)."""
+    """Lowercase /generate_bpmn route remains available during migration."""
     response = client.post("/generate_bpmn", json={})
-    assert response.status_code == 410
+    assert response.status_code == 400
 
 
 def test_generate_pnml_lowercase_route(client):
-    """Lowercase /generate_pnml route still exists (410, not 404)."""
+    """Lowercase /generate_pnml route remains available during migration."""
     response = client.post("/generate_pnml", json={})
-    assert response.status_code == 410
+    assert response.status_code == 400
 
 
 def test_app_has_swagger_ui():

@@ -1,35 +1,44 @@
-from flask import jsonify, send_from_directory, request, make_response
-import time, logging, os
+import json
+import logging
+import os
+import time
 from functools import wraps
+
+import requests
+from flask import jsonify, make_response, request, send_from_directory
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
 from app.api import api_bp
 from app.__init__ import REQUEST_COUNT, REQUEST_LATENCY
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-import requests
 from app.backend.connector_client import (
     ConnectorClient,
-    ConnectorError,
     ConnectorClientError,
+    ConnectorError,
 )
 from app.backend.modeltransformer import ModelTransformer
+from app.backend.xml_parser import json_to_bpmn
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
 
-# Deprecation signaling headers shared by the deprecated endpoints. No Sunset
-# header: these endpoints already return 410 Gone, so a future sunset date would
-# contradict that. Deprecation + Link (migration target) remain.
 _DEPRECATION_LINK = (
     '<https://woped.dhbw-karlsruhe.de/docs/migration>; rel="deprecation"'
 )
+_LEGACY_DEPRECATION_DATE = "@1780272000"  # 2026-06-01T00:00:00Z
+_LEGACY_SUNSET_DATE = "Tue, 01 Dec 2026 00:00:00 GMT"
+_REMOVED_API_CALL_SUNSET_DATE = "Wed, 31 Dec 2025 23:59:59 GMT"
+_LEGACY_PROVIDER = "openai"
+_LEGACY_MODEL = "gpt-4o"
 
 
 def deprecated(view):
-    """Attach deprecation signaling headers to a view's response."""
+    """Attach migration headers while a legacy endpoint remains functional."""
 
     @wraps(view)
     def wrapper(*args, **kwargs):
         response = make_response(view(*args, **kwargs))
-        response.headers.setdefault("Deprecation", "true")
+        response.headers.setdefault("Deprecation", _LEGACY_DEPRECATION_DATE)
+        response.headers.setdefault("Sunset", _LEGACY_SUNSET_DATE)
         response.headers.setdefault("Link", _DEPRECATION_LINK)
         return response
 
@@ -50,16 +59,99 @@ def _extract_bearer():
     return None
 
 
-def _deprecated_response():
-    """Sunset response for the legacy endpoints: 410 Gone, directing clients to /v1."""
+def _removed_api_call_response():
+    """Respond for the legacy endpoint whose previously announced sunset elapsed."""
     REQUEST_COUNT.labels(
         method=request.method, endpoint=request.path, status="410"
     ).inc()
-    return _error_response(
-        410,
-        "deprecated",
-        "This endpoint is deprecated and no longer returns results; use the /v1 API.",
+    response = make_response(
+        _error_response(
+            410,
+            "deprecated",
+            "This endpoint was removed after its sunset date; use the /v1 API.",
+        )
     )
+    response.headers["Sunset"] = _REMOVED_API_CALL_SUNSET_DATE
+    response.headers["Link"] = _DEPRECATION_LINK
+    return response
+
+
+def _raw_response_to_bpmn(raw_response):
+    """Convert the connector's LLM JSON response to BPMN XML."""
+    if not isinstance(raw_response, str):
+        raise ValueError("LLM API connector response must be text.")
+
+    content = raw_response.strip()
+    if content.startswith("<"):
+        return content
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1] if "\n" in content else content[3:]
+        if content.endswith("```"):
+            content = content.rsplit("```", 1)[0]
+        content = content.strip()
+
+    try:
+        return json_to_bpmn(json.loads(content))
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ValueError("LLM API connector returned invalid BPMN JSON.") from exc
+
+
+def _generate_bpmn(authorization, text, provider, model):
+    raw_response = ConnectorClient().generate(
+        authorization=authorization,
+        user_text=text,
+        provider=provider,
+        model=model,
+    )
+    return _raw_response_to_bpmn(raw_response)
+
+
+def _transform_to_pnml(bpmn_xml):
+    return ModelTransformer().transform(bpmn_xml, {"direction": "bpmntopnml"})
+
+
+def _legacy_generate(target):
+    """Preserve the unversioned generation contract during its migration period."""
+    start_time = time.time()
+    endpoint_label = request.path
+    status = "200"
+    try:
+        data = request.get_json(silent=True)
+        if not data:
+            status = "400"
+            return jsonify({"error": "Request body must be JSON."}), 400
+
+        missing = [field for field in ("text", "api_key") if field not in data]
+        if missing:
+            status = "400"
+            return jsonify({"error": f"Missing data for: {', '.join(missing)}"}), 400
+
+        bpmn_xml = _generate_bpmn(
+            authorization=f"Bearer {data['api_key']}",
+            text=data["text"],
+            provider=_LEGACY_PROVIDER,
+            model=_LEGACY_MODEL,
+        )
+        result = _transform_to_pnml(bpmn_xml) if target == "pnml" else bpmn_xml
+        return jsonify({"result": result}), 200
+    except requests.exceptions.RequestException as exc:
+        status = "500"
+        logger.error("Legacy transformation failed", extra={"error": str(exc)})
+        return jsonify({"error": "BPMN to PNML transformation failed."}), 500
+    except ConnectorError as exc:
+        status = "500"
+        logger.error("Legacy connector call failed", extra={"error": str(exc)})
+        return jsonify({"error": "LLM API connector error."}), 500
+    except (ConnectorClientError, ValueError) as exc:
+        status = "500"
+        logger.error("Legacy generation failed", extra={"error": str(exc)})
+        return jsonify({"error": "Invalid response from LLM API."}), 500
+    finally:
+        duration = time.time() - start_time
+        REQUEST_COUNT.labels(
+            method="POST", endpoint=endpoint_label, status=status
+        ).inc()
+        REQUEST_LATENCY.labels(method="POST", endpoint=endpoint_label).observe(duration)
 
 
 @api_bp.route("/example")
@@ -83,13 +175,21 @@ def metrics():
 @api_bp.route("/test_connection", methods=["GET"])
 @deprecated
 def test():
-    return _deprecated_response()
+    start_time = time.time()
+    try:
+        REQUEST_COUNT.labels(
+            method="GET", endpoint="/test_connection", status="200"
+        ).inc()
+        return jsonify("Successful"), 200
+    finally:
+        REQUEST_LATENCY.labels(method="GET", endpoint="/test_connection").observe(
+            time.time() - start_time
+        )
 
 
 @api_bp.route("/api_call", methods=["POST"])
-@deprecated
 def api_call():
-    return _deprecated_response()
+    return _removed_api_call_response()
 
 
 @api_bp.route("/generate_bpmn", methods=["POST"])  # preferred lowercase alias
@@ -98,7 +198,7 @@ def api_call():
 )  # legacy/case-variant for compatibility
 @deprecated
 def generateBPMN():
-    return _deprecated_response()
+    return _legacy_generate("bpmn")
 
 
 @api_bp.route("/generate_pnml", methods=["POST"])  # preferred lowercase alias
@@ -107,7 +207,7 @@ def generateBPMN():
 )  # legacy/case-variant for compatibility
 @deprecated
 def generatePNML():
-    return _deprecated_response()
+    return _legacy_generate("pnml")
 
 
 # --- v1 API ---------------------------------------------------------------
@@ -116,9 +216,8 @@ def generatePNML():
 def _v1_generate(target):
     """Receive a v1 generate request, validate it, and produce the requested model.
 
-    The connector always returns BPMN. ``target == "bpmn"`` returns it unchanged;
-    ``target == "pnml"`` runs the connector's BPMN through the model transformer
-    (BPMN -> PNML) before returning. ``target`` is set by the route, not the client.
+    The connector returns an LLM BPMN structure which this service converts to
+    BPMN XML. ``target == "pnml"`` then transforms that XML to PNML.
     """
     start_time = time.time()
     endpoint_label = request.path
@@ -145,18 +244,16 @@ def _v1_generate(target):
                 f"Missing or empty field(s): {', '.join(missing)}.",
             )
 
-        raw_response = ConnectorClient().generate(
+        bpmn_xml = _generate_bpmn(
             authorization=authorization,
-            user_text=data["text"],
+            text=data["text"],
             provider=data["provider"],
             model=data["model"],
         )
 
         if target == "pnml":
             try:
-                result = ModelTransformer().transform(
-                    raw_response, {"direction": "bpmntopnml"}
-                )
+                result = _transform_to_pnml(bpmn_xml)
             except requests.exceptions.RequestException as e:
                 status = "500"
                 logger.error(
@@ -169,7 +266,7 @@ def _v1_generate(target):
                     "The BPMN to PNML transformation service failed.",
                 )
         else:
-            result = raw_response
+            result = bpmn_xml
 
         logger.info("v1 generate completed", extra={"endpoint": endpoint_label})
         return jsonify({"result": result}), 200
@@ -250,6 +347,12 @@ def v1_health():
 
 
 @api_bp.route("/_/_/echo")
-@deprecated
 def echo():
-    return _deprecated_response()
+    start_time = time.time()
+    try:
+        REQUEST_COUNT.labels(method="GET", endpoint="/_/_/echo", status="200").inc()
+        return jsonify(success=True), 200
+    finally:
+        REQUEST_LATENCY.labels(method="GET", endpoint="/_/_/echo").observe(
+            time.time() - start_time
+        )

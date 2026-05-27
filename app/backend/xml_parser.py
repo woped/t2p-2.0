@@ -51,13 +51,12 @@ def json_to_bpmn(bpmn_data):
 
     # Create all events, tasks, and gateways
     for event in bpmn_data["events"]:
-        event_type = (
-            "startEvent"
-            if event["type"] == "Start"
-            else "endEvent"
-            if event["type"] == "End"
-            else "intermediateCatchEvent"
-        )
+        event_type = {
+            "Start": "startEvent",
+            "startEvent": "startEvent",
+            "End": "endEvent",
+            "endEvent": "endEvent",
+        }.get(event["type"], "intermediateCatchEvent")
         ET.SubElement(
             process, f"{{{ns['bpmn']}}}{event_type}", id=event["id"], name=event["name"]
         )

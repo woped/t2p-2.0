@@ -17,31 +17,39 @@ The `/v1` namespace is the current API. See the spec for full schemas.
 | GET  | `/v1/models`        | List available `provider`/`model` pairs (see below) |
 | GET  | `/v1/health`        | Shallow liveness check |
 
-Operational and meta endpoints, outside the `/v1` contract: `GET /example`,
-`GET /api/swagger.yaml` (the spec), and `GET /metrics` (Prometheus).
+Operational and meta endpoints, outside the `/v1` contract: `GET /_/_/echo`,
+`GET /example`, `GET /api/swagger.yaml` (the spec), and `GET /metrics`
+(Prometheus).
 
 ### Deprecated endpoints
 
-The unversioned legacy endpoints are **gone**: they return `410 Gone` with an
-`error.code` of `deprecated` and no longer produce results. Each carries
-`Deprecation: true` and a `Link` header pointing at the migration guide (no
-`Sunset` header — the endpoints are already removed, so a future sunset date
-would be contradictory). Clients must migrate to the `/v1` endpoint shown below.
+`POST /api_call` was already deprecated before `/v1` was introduced and its
+announced sunset date, 31 December 2025, has elapsed. It returns `410 Gone`.
+
+The unversioned generation endpoints remain functional for compatibility until
+1 December 2026. They accept their existing request contract, including
+`api_key` in the JSON body, and internally use the new connector flow with the
+legacy defaults `provider=openai` and `model=gpt-4o`. `GET /test_connection`
+also remains functional until that date. Their responses include:
+
+```
+Deprecation: @1780272000
+Sunset: Tue, 01 Dec 2026 00:00:00 GMT
+Link: <https://woped.dhbw-karlsruhe.de/docs/migration>; rel="deprecation"
+```
 
 | Method | Path | Migrate to |
 |--------|------|------------|
 | GET  | `/test_connection` | `GET /v1/health` |
-| GET  | `/_/_/echo`        | `GET /v1/health` |
-| POST | `/api_call`        | `POST /v1/generate/bpmn` |
+| POST | `/api_call`        | `POST /v1/generate/bpmn` (removed; returns `410`) |
 | POST | `/generate_bpmn`, `/generate_BPMN` | `POST /v1/generate/bpmn` |
 | POST | `/generate_pnml`, `/generate_PNML` | `POST /v1/generate/pnml` |
 
 ## `GET /v1/models`
 
 The model registry is owned by the connector; this endpoint proxies the connector's
-`GET /models`. The list is cached in memory with a ~10-minute TTL, loaded lazily on
-first use, so startup does not depend on connector availability. If the connector is
-unreachable, the cached list is returned when available, otherwise `500 upstream_error`.
+`GET /models`. If the connector is unreachable, this endpoint returns
+`500 upstream_error`.
 
 ## Error codes
 
@@ -54,7 +62,7 @@ Error responses share the shape `{ "error": { "code": string, "message": string 
 | 400 | `invalid_request`  | malformed body or missing/empty `text` |
 | 400 | `invalid_provider` | `provider`/`model` not in the registry |
 | 401 | `unauthorized`     | missing or malformed bearer token |
-| 410 | `deprecated`       | a removed legacy endpoint was called |
+| 410 | `deprecated`       | the already-sunset `/api_call` endpoint was called |
 | 500 | `upstream_error`   | connector call failed (unreachable, timeout, non-200) |
 | 500 | `transform_error`  | the BPMN→PNML transformation service failed (`/v1/generate/pnml` only) |
 | 500 | `internal_error`   | unexpected error |
@@ -68,14 +76,14 @@ connector repository's `docs/api-contract.md`):
 POST <connector>/generate
 Header: Authorization: Bearer <api_key>
 Body: { "user_text": string, "provider": string, "model": string }
-Response 200: { "raw_response": string }
+Response 200: { "raw_response": string }  // LLM BPMN-structure JSON
 ```
 
 The client's `Authorization` header is forwarded unchanged; the request `text` is sent as
-`user_text`. The `provider`/`model` of a generate request are validated against the
-cached model list when available; otherwise validation is left to the connector.
+`user_text`. Provider and model validation is owned by the connector.
 
-The connector always returns BPMN. `POST /v1/generate/bpmn` returns it unchanged.
-`POST /v1/generate/pnml` runs the connector's BPMN through the model-transformer
+The connector returns the raw LLM-generated BPMN structure. T2P converts it to BPMN
+XML. `POST /v1/generate/bpmn` returns that BPMN. `POST /v1/generate/pnml` runs
+the BPMN through the model-transformer
 service (`POST <transformer>/transform`, `direction=bpmntopnml`) and returns the
 resulting PNML; a transformer failure surfaces as `500 transform_error`.

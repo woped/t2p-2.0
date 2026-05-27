@@ -3,8 +3,9 @@ info:
   title: WOPED T2P Orchestrator API
   description: |
     Text-to-model transformation service. The current API lives under the
-    `/v1` namespace. The unversioned legacy endpoints are deprecated and now
-    return `410 Gone`; clients should migrate to the `/v1` endpoints.
+    `/v1` namespace. Existing unversioned generation endpoints remain
+    functional during their deprecation period; clients should migrate to
+    `/v1`. The previously deprecated `/api_call` endpoint has been removed.
   version: 1.0.0
   contact:
     name: API Support
@@ -44,10 +45,10 @@ paths:
     post:
       summary: Generate a PNML model from a process description
       description: >-
-        The connector generates BPMN from the text; the result is then
-        transformed to PNML by the model-transformer service before it is
-        returned. A failure of the transformation step yields a 500 with
-        error code `transform_error`.
+        The connector generates a BPMN structure from the text; this service
+        converts it to BPMN XML and transforms it to PNML using the
+        model-transformer service. A failure of the transformation step yields
+        a 500 with error code `transform_error`.
       operationId: v1GeneratePnml
       tags: [v1]
       security:
@@ -102,7 +103,7 @@ paths:
 
   /api_call:
     post:
-      summary: Deprecated — use /v1/generate/bpmn
+      summary: Removed legacy operation; use /v1/generate/bpmn
       operationId: apiCallLegacy
       deprecated: true
       tags: [legacy]
@@ -112,43 +113,118 @@ paths:
 
   /generate_bpmn:
     post:
-      summary: Deprecated — use /v1/generate/bpmn
+      summary: Deprecated compatibility operation; use /v1/generate/bpmn
       operationId: generateBpmnLegacy
       deprecated: true
       tags: [legacy]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegacyGenerateRequest'
       responses:
-        '410':
-          $ref: '#/components/responses/Error'
+        '200':
+          description: Generation successful; includes deprecation headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResult'
+        '400':
+          $ref: '#/components/responses/LegacyError'
+        '500':
+          $ref: '#/components/responses/LegacyError'
+
+  /generate_BPMN:
+    post:
+      summary: Deprecated compatibility operation; use /v1/generate/bpmn
+      operationId: generateBpmnLegacyUppercase
+      deprecated: true
+      tags: [legacy]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegacyGenerateRequest'
+      responses:
+        '200':
+          description: Generation successful; includes deprecation headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResult'
+        '400':
+          $ref: '#/components/responses/LegacyError'
+        '500':
+          $ref: '#/components/responses/LegacyError'
 
   /generate_pnml:
     post:
-      summary: Deprecated — use /v1/generate/pnml
+      summary: Deprecated compatibility operation; use /v1/generate/pnml
       operationId: generatePnmlLegacy
       deprecated: true
       tags: [legacy]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegacyGenerateRequest'
       responses:
-        '410':
-          $ref: '#/components/responses/Error'
+        '200':
+          description: Generation successful; includes deprecation headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResult'
+        '400':
+          $ref: '#/components/responses/LegacyError'
+        '500':
+          $ref: '#/components/responses/LegacyError'
+
+  /generate_PNML:
+    post:
+      summary: Deprecated compatibility operation; use /v1/generate/pnml
+      operationId: generatePnmlLegacyUppercase
+      deprecated: true
+      tags: [legacy]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegacyGenerateRequest'
+      responses:
+        '200':
+          description: Generation successful; includes deprecation headers
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenerateResult'
+        '400':
+          $ref: '#/components/responses/LegacyError'
+        '500':
+          $ref: '#/components/responses/LegacyError'
 
   /test_connection:
     get:
-      summary: Deprecated — use /v1/health
+      summary: Deprecated compatibility operation; use /v1/health
       operationId: testConnectionLegacy
       deprecated: true
       tags: [legacy]
       responses:
-        '410':
-          $ref: '#/components/responses/Error'
+        '200':
+          description: Connection successful; includes deprecation headers
 
   /_/_/echo:
     get:
-      summary: Deprecated — use /v1/health
-      operationId: echoLegacy
-      deprecated: true
-      tags: [legacy]
+      summary: Operational liveness endpoint
+      operationId: echo
+      tags: [operations]
       responses:
-        '410':
-          $ref: '#/components/responses/Error'
+        '200':
+          description: Service is reachable
 
 components:
   securitySchemes:
@@ -164,6 +240,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    LegacyError:
+      description: Legacy error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/LegacyError'
 
   schemas:
     GenerateRequest:
@@ -189,6 +271,25 @@ components:
         result:
           type: string
           description: The generated model output.
+
+    LegacyGenerateRequest:
+      type: object
+      required: [text, api_key]
+      deprecated: true
+      properties:
+        text:
+          type: string
+          description: Natural-language process description.
+        api_key:
+          type: string
+          description: Deprecated body-based provider key; use bearer authentication in `/v1`.
+
+    LegacyError:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Legacy human-readable error message.
 
     ModelsResponse:
       type: object
@@ -232,4 +333,6 @@ tags:
   - name: v1
     description: Current text-to-model transformation API
   - name: legacy
-    description: Deprecated endpoints (return 410 Gone)
+    description: Deprecated compatibility operations
+  - name: operations
+    description: Unversioned operational endpoints

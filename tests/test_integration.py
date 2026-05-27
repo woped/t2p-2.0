@@ -41,9 +41,10 @@ class TestMetricsIntegration:
 class TestCORSAndSecurity:
     """CORS and content-type behavior on a representative endpoint."""
 
-    def test_legacy_endpoint_is_gone(self, client):
+    def test_deprecated_health_alias_remains_functional(self, client):
         response = client.get("/test_connection")
-        assert response.status_code == 410
+        assert response.status_code == 200
+        assert response.headers.get("Deprecation") == "@1780272000"
 
     def test_content_type_json(self, client):
         response = client.get("/test_connection")

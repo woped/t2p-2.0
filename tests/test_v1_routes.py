@@ -4,6 +4,17 @@ from app.backend.connector_client import ConnectorError, ConnectorClientError
 
 AUTH = {"Authorization": "Bearer secret-token"}
 BODY = {"text": "describe a process", "provider": "openai", "model": "gpt-4o"}
+RAW_MODEL_JSON = """{
+  "events": [
+    {"id": "start", "type": "startEvent", "name": "Start"},
+    {"id": "end", "type": "endEvent", "name": "End"}
+  ],
+  "tasks": [],
+  "gateways": [],
+  "flows": [
+    {"id": "flow", "type": "sequenceFlow", "source": "start", "target": "end"}
+  ]
+}"""
 
 
 # --- /v1/generate ---------------------------------------------------------
@@ -11,12 +22,12 @@ BODY = {"text": "describe a process", "provider": "openai", "model": "gpt-4o"}
 
 @patch("app.api.routes.ConnectorClient")
 def test_v1_generate_bpmn_success(mock_cc, client):
-    mock_cc.return_value.generate.return_value = "RAW"
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
 
     resp = client.post("/v1/generate/bpmn", json=BODY, headers=AUTH)
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"result": "RAW"}
+    assert "<definitions" in resp.get_json()["result"]
     # The request is translated into the connector call: header forwarded,
     # text -> user_text, provider/model passed through.
     mock_cc.return_value.generate.assert_called_once_with(
@@ -30,8 +41,7 @@ def test_v1_generate_bpmn_success(mock_cc, client):
 @patch("app.api.routes.ModelTransformer")
 @patch("app.api.routes.ConnectorClient")
 def test_v1_generate_pnml_success(mock_cc, mock_mt, client):
-    # The connector returns BPMN; /pnml transforms it to PNML before returning.
-    mock_cc.return_value.generate.return_value = "BPMN"
+    mock_cc.return_value.generate.return_value = "<bpmn>BPMN</bpmn>"
     mock_mt.return_value.transform.return_value = "PNML"
 
     resp = client.post("/v1/generate/pnml", json=BODY, headers=AUTH)
@@ -39,7 +49,7 @@ def test_v1_generate_pnml_success(mock_cc, mock_mt, client):
     assert resp.status_code == 200
     assert resp.get_json() == {"result": "PNML"}
     mock_mt.return_value.transform.assert_called_once_with(
-        "BPMN", {"direction": "bpmntopnml"}
+        "<bpmn>BPMN</bpmn>", {"direction": "bpmntopnml"}
     )
 
 
@@ -48,7 +58,7 @@ def test_v1_generate_pnml_success(mock_cc, mock_mt, client):
 def test_v1_generate_pnml_transform_error_returns_500(mock_cc, mock_mt, client):
     import requests
 
-    mock_cc.return_value.generate.return_value = "BPMN"
+    mock_cc.return_value.generate.return_value = "<bpmn>BPMN</bpmn>"
     mock_mt.return_value.transform.side_effect = requests.exceptions.RequestException(
         "transformer down"
     )
@@ -165,13 +175,52 @@ def test_v1_health_ok(client):
 def test_deprecated_test_connection_has_headers(client):
     resp = client.get("/test_connection")
 
-    assert resp.status_code == 410
-    assert resp.headers.get("Deprecation") == "true"
+    assert resp.status_code == 200
+    assert resp.get_json() == "Successful"
+    assert resp.headers.get("Deprecation") == "@1780272000"
+    assert resp.headers.get("Sunset") == "Tue, 01 Dec 2026 00:00:00 GMT"
     assert "Link" in resp.headers
 
 
-def test_deprecated_echo_has_headers(client):
+def test_operational_echo_is_not_deprecated(client):
     resp = client.get("/_/_/echo")
 
-    assert resp.status_code == 410
-    assert resp.headers.get("Deprecation") == "true"
+    assert resp.status_code == 200
+    assert resp.get_json() == {"success": True}
+    assert "Deprecation" not in resp.headers
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_legacy_bpmn_uses_default_model_and_preserves_response(mock_cc, client):
+    mock_cc.return_value.generate.return_value = "<bpmn>legacy</bpmn>"
+
+    resp = client.post(
+        "/generate_BPMN", json={"text": "describe a process", "api_key": "secret-token"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"result": "<bpmn>legacy</bpmn>"}
+    assert resp.headers.get("Deprecation") == "@1780272000"
+    mock_cc.return_value.generate.assert_called_once_with(
+        authorization="Bearer secret-token",
+        user_text="describe a process",
+        provider="openai",
+        model="gpt-4o",
+    )
+
+
+@patch("app.api.routes.ModelTransformer")
+@patch("app.api.routes.ConnectorClient")
+def test_legacy_pnml_uses_new_flow_and_preserves_response(mock_cc, mock_mt, client):
+    mock_cc.return_value.generate.return_value = "<bpmn>legacy</bpmn>"
+    mock_mt.return_value.transform.return_value = "<pnml>legacy</pnml>"
+
+    resp = client.post(
+        "/generate_PNML", json={"text": "describe a process", "api_key": "secret-token"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"result": "<pnml>legacy</pnml>"}
+    mock_mt.return_value.transform.assert_called_once_with(
+        "<bpmn>legacy</bpmn>", {"direction": "bpmntopnml"}
+    )

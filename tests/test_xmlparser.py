@@ -43,6 +43,17 @@ def test_json_to_bpmn_generates_xml(example_data):
     assert "endEvent1" in result
 
 
+def test_json_to_bpmn_accepts_connector_event_type_names(example_data):
+    example_data["events"][0]["type"] = "startEvent"
+    example_data["events"][1]["type"] = "endEvent"
+
+    result = json_to_bpmn(example_data)
+
+    assert "<startEvent" in result
+    assert "<endEvent" in result
+    assert "intermediateCatchEvent" not in result
+
+
 def test_json_to_bpmn_with_gateways():
     """Test BPMN generation with gateways"""
     data = {
