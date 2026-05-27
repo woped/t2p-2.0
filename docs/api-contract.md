@@ -76,14 +76,24 @@ connector repository's `docs/api-contract.md`):
 POST <connector>/generate
 Header: Authorization: Bearer <api_key>
 Body: { "user_text": string, "provider": string, "model": string }
-Response 200: { "raw_response": string }  // LLM BPMN-structure JSON
+Response 200: { "raw_response": string }
 ```
 
 The client's `Authorization` header is forwarded unchanged; the request `text` is sent as
 `user_text`. Provider and model validation is owned by the connector.
 
-The connector returns the raw LLM-generated BPMN structure. T2P converts it to BPMN
-XML. `POST /v1/generate/bpmn` returns that BPMN. `POST /v1/generate/pnml` runs
-the BPMN through the model-transformer
-service (`POST <transformer>/transform`, `direction=bpmntopnml`) and returns the
-resulting PNML; a transformer failure surfaces as `500 transform_error`.
+### Internal model representation
+
+The value of `raw_response` is a serialized JSON process model containing logical model
+elements such as `events`, `tasks`, `gateways`, and `flows`; it is not BPMN XML.
+The connector-to-T2P boundary deliberately uses this structured JSON representation so
+future world-model processing can consume or enrich the logical model without carrying
+XML markup in the LLM exchange. This is intended to reduce markup-related token
+overhead; the actual token reduction must be measured once that workflow is implemented.
+
+T2P owns conversion from the structured JSON process model to BPMN XML.
+`POST /v1/generate/bpmn` converts the JSON to BPMN XML and returns that BPMN.
+`POST /v1/generate/pnml` first converts the JSON to BPMN XML, then sends the XML
+to the model-transformer service (`POST <transformer>/transform`,
+`direction=bpmntopnml`) and returns the resulting PNML; a transformer failure
+surfaces as `500 transform_error`.
