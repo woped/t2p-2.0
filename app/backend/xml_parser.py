@@ -15,6 +15,15 @@ _BPMN_GATEWAY_W, _BPMN_GATEWAY_H = 50, 50
 _PNML_PLACE_W, _PNML_PLACE_H = 50, 50
 _PNML_TRANS_W, _PNML_TRANS_H = 50, 30
 
+# Maps a model event "type" to its BPMN element tag; anything unrecognised
+# becomes a generic intermediateCatchEvent.
+_EVENT_TYPE_MAP = {
+    "Start": "startEvent",
+    "startEvent": "startEvent",
+    "End": "endEvent",
+    "endEvent": "endEvent",
+}
+
 # BPMN namespaces, registered once so ET.tostring emits the expected prefixes.
 _NS = {
     "bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL",
@@ -233,12 +242,7 @@ def _build_semantic_process(model):
     )
 
     for event in model["events"]:
-        event_type = {
-            "Start": "startEvent",
-            "startEvent": "startEvent",
-            "End": "endEvent",
-            "endEvent": "endEvent",
-        }.get(event["type"], "intermediateCatchEvent")
+        event_type = _EVENT_TYPE_MAP.get(event["type"], "intermediateCatchEvent")
         ET.SubElement(
             process,
             f"{{{_NS['bpmn']}}}{event_type}",
