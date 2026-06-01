@@ -76,6 +76,11 @@ def _generate_bpmn(authorization, text, provider, model):
 
 
 def _transform_to_pnml(bpmn_xml):
+    # The incoming BPMN already carries a layout, but the transformer discards
+    # it and we recompute coordinates on the PNML below. That double layout is
+    # intentional: both paths reuse the same BPMN builder, and the cost is
+    # negligible next to the LLM call and transformer round-trip. Avoiding it
+    # would mean emitting layout-free BPMN, which the transformer may reject.
     pnml_xml = ModelTransformer().transform(bpmn_xml, {"direction": "bpmntopnml"})
     return assign_pnml_coordinates(pnml_xml)
 
