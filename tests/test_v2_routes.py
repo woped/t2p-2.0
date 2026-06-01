@@ -140,7 +140,7 @@ def test_v2_generate_relays_connector_4xx(mock_cc, client):
 
 @patch("app.api.routes.ConnectorClient")
 def test_v2_models_success(mock_cc, client):
-    models = [{"provider": "openai", "model": "gpt-4o", "default": True}]
+    models = [{"provider": "openai", "model": "gpt-4o"}]
     mock_cc.return_value.list_models.return_value = models
 
     resp = client.get("/v2/models")

@@ -305,9 +305,6 @@ components:
               model:
                 type: string
                 example: gpt-4o
-              default:
-                type: boolean
-                example: true
 
     HealthResponse:
       type: object

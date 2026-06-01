@@ -143,7 +143,7 @@ def test_generate_missing_raw_response_raises(mock_post, connector, app):
 
 @patch("app.backend.connector_client.requests.get")
 def test_list_models_success_returns_list(mock_get, connector, app):
-    models = [{"provider": "openai", "model": "gpt-4o", "default": True}]
+    models = [{"provider": "openai", "model": "gpt-4o"}]
     mock_get.return_value.status_code = 200
     mock_get.return_value.json.return_value = {"models": models}
 
