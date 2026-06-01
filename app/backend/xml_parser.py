@@ -12,11 +12,24 @@ _BPMN_EVENT_W, _BPMN_EVENT_H = 36, 36
 _BPMN_TASK_W, _BPMN_TASK_H = 100, 80
 _BPMN_GATEWAY_W, _BPMN_GATEWAY_H = 50, 50
 
-_PNML_PLACE_W, _PNML_PLACE_H = 50, 50
-_PNML_TRANS_W, _PNML_TRANS_H = 50, 30
+# BPMN namespaces, registered once so ET.tostring emits the expected prefixes.
+_NS = {
+    "bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL",
+    "bpmndi": "http://www.omg.org/spec/BPMN/20100524/DI",
+    "di": "http://www.omg.org/spec/DD/20100524/DI",
+    "dc": "http://www.omg.org/spec/DD/20100524/DC",
+    "xsi": "http://www.w3.org/2001/XMLSchema-instance",
+}
+ET.register_namespace("", _NS["bpmn"])
+ET.register_namespace("bpmndi", _NS["bpmndi"])
+ET.register_namespace("di", _NS["di"])
+ET.register_namespace("dc", _NS["dc"])
+ET.register_namespace("xsi", _NS["xsi"])
 
 
-def _layered_layout(elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_offset=50):
+def _layered_layout(
+    elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_offset=50
+):
     """Assign top-left (x, y) positions using a left-to-right layered layout.
 
     Layers are determined by a longest-path computation over the DAG formed by
@@ -109,139 +122,26 @@ def _layered_layout(elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_of
     return positions
 
 
-def assign_pnml_coordinates(pnml_xml):
-    """Parse a PNML XML string and assign proper layout coordinates to all
-    places and transitions.
+def _build_semantic_process(model):
+    """Build the semantic BPMN ``<definitions>``/``<process>`` tree.
 
-    Uses the same layered layout algorithm as the BPMN generator.  In PNML,
-    ``<graphics><position>`` holds *centre* coordinates, so positions returned
-    by ``_layered_layout`` (top-left) are shifted by half the element size.
-
-    If *pnml_xml* is not valid XML the original string is returned unchanged.
-
-    Args:
-        pnml_xml: PNML XML string (with or without ``<?xml ...?>`` declaration).
-
-    Returns:
-        Updated PNML XML string.
+    Translates each element's type into its BPMN tag and adds every event,
+    task, gateway and sequence flow. No diagram geometry is produced here.
     """
-    if not pnml_xml or not isinstance(pnml_xml, str):
-        return pnml_xml
-
-    try:
-        root = ET.fromstring(pnml_xml)
-    except ET.ParseError:
-        logger.warning("assign_pnml_coordinates: not valid XML – layout skipped")
-        return pnml_xml
-
-    # Detect Clark-notation namespace prefix, e.g. '{http://www.pnml.org/...}'.
-    raw_tag = root.tag
-    ns_prefix = "{" + raw_tag[1: raw_tag.index("}")] + "}" if raw_tag.startswith("{") else ""
-
-    # Register the namespace so ET.tostring() preserves the default namespace.
-    if ns_prefix:
-        ET.register_namespace("", ns_prefix[1:-1])
-
-    # Collect all places and transitions from the entire tree (handles
-    # nested <pnml><net><page>... hierarchies).
-    elements_by_id: dict[str, dict] = {}
-    elem_xml_map: dict[str, ET.Element] = {}
-
-    for place in root.iter(f"{ns_prefix}place"):
-        pid = place.get("id")
-        if pid:
-            elements_by_id[pid] = {"w": _PNML_PLACE_W, "h": _PNML_PLACE_H}
-            elem_xml_map[pid] = place
-
-    for trans in root.iter(f"{ns_prefix}transition"):
-        tid = trans.get("id")
-        if tid:
-            elements_by_id[tid] = {"w": _PNML_TRANS_W, "h": _PNML_TRANS_H}
-            elem_xml_map[tid] = trans
-
-    if not elements_by_id:
-        return pnml_xml  # nothing to lay out
-
-    flows = [
-        {"source": arc.get("source", ""), "target": arc.get("target", "")}
-        for arc in root.iter(f"{ns_prefix}arc")
-        if arc.get("source") and arc.get("target")
-    ]
-
-    positions = _layered_layout(
-        elements_by_id, flows, h_gap=80, v_gap=50, x_offset=100, y_offset=100
-    )
-
-    for nid, pos in positions.items():
-        elem = elem_xml_map.get(nid)
-        if elem is None:
-            continue
-
-        # PNML <position> stores centre coordinates.
-        cx = pos["x"] + pos["w"] // 2
-        cy = pos["y"] + pos["h"] // 2
-
-        graphics = elem.find(f"{ns_prefix}graphics")
-        if graphics is None:
-            graphics = ET.SubElement(elem, f"{ns_prefix}graphics")
-
-        position_el = graphics.find(f"{ns_prefix}position")
-        if position_el is None:
-            position_el = ET.SubElement(graphics, f"{ns_prefix}position")
-        position_el.set("x", str(cx))
-        position_el.set("y", str(cy))
-
-    ET.indent(ET.ElementTree(root), space="  ", level=0)
-    return ET.tostring(root, encoding="unicode")
-
-
-def json_to_bpmn(bpmn_data):
-    logger.info(
-        "Converting BPMN JSON to XML",
-        extra={
-            "events": len(bpmn_data.get("events", []))
-            if isinstance(bpmn_data, dict)
-            else None,
-            "tasks": len(bpmn_data.get("tasks", []))
-            if isinstance(bpmn_data, dict)
-            else None,
-            "gateways": len(bpmn_data.get("gateways", []))
-            if isinstance(bpmn_data, dict)
-            else None,
-            "flows": len(bpmn_data.get("flows", []))
-            if isinstance(bpmn_data, dict)
-            else None,
-        },
-    )
-    ns = {
-        "bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL",
-        "bpmndi": "http://www.omg.org/spec/BPMN/20100524/DI",
-        "di": "http://www.omg.org/spec/DD/20100524/DI",
-        "dc": "http://www.omg.org/spec/DD/20100524/DC",
-        "xsi": "http://www.w3.org/2001/XMLSchema-instance",
-    }
-    ET.register_namespace("", ns["bpmn"])
-    ET.register_namespace("bpmndi", ns["bpmndi"])
-    ET.register_namespace("di", ns["di"])
-    ET.register_namespace("dc", ns["dc"])
-    ET.register_namespace("xsi", ns["xsi"])
-
     definitions = ET.Element(
-        f"{{{ns['bpmn']}}}definitions",
+        f"{{{_NS['bpmn']}}}definitions",
         attrib={
-            f"{{{ns['xsi']}}}schemaLocation": "http://www.omg.org/spec/BPMN/20100524/MODEL https://www.omg.org/spec/BPMN/20100501/BPMN20.xsd",
+            f"{{{_NS['xsi']}}}schemaLocation": "http://www.omg.org/spec/BPMN/20100524/MODEL https://www.omg.org/spec/BPMN/20100501/BPMN20.xsd",
             "targetNamespace": "http://example.bpmn.com/schema/bpmn",
         },
     )
-
     process = ET.SubElement(
         definitions,
-        f"{{{ns['bpmn']}}}process",
+        f"{{{_NS['bpmn']}}}process",
         attrib={"id": "Process_1", "isExecutable": "false"},
     )
 
-    # Create all events, tasks, and gateways
-    for event in bpmn_data["events"]:
+    for event in model["events"]:
         event_type = {
             "Start": "startEvent",
             "startEvent": "startEvent",
@@ -249,20 +149,22 @@ def json_to_bpmn(bpmn_data):
             "endEvent": "endEvent",
         }.get(event["type"], "intermediateCatchEvent")
         ET.SubElement(
-            process, f"{{{ns['bpmn']}}}{event_type}", id=event["id"], name=event["name"]
+            process,
+            f"{{{_NS['bpmn']}}}{event_type}",
+            id=event["id"],
+            name=event["name"],
         )
 
-    for task in bpmn_data["tasks"]:
-        # Convert task type to camelCase (e.g., UserTask -> userTask)
+    for task in model["tasks"]:
+        # Convert task type to camelCase (e.g., UserTask -> userTask).
         task_type = (
             task["type"][0].lower() + task["type"][1:] if task["type"] else task["type"]
         )
         ET.SubElement(
-            process, f"{{{ns['bpmn']}}}{task_type}", id=task["id"], name=task["name"]
+            process, f"{{{_NS['bpmn']}}}{task_type}", id=task["id"], name=task["name"]
         )
 
-    for gateway in bpmn_data["gateways"]:
-        # Convert gateway type to camelCase (e.g., ParallelGateway -> parallelGateway)
+    for gateway in model["gateways"]:
         gateway_type = (
             gateway["type"][0].lower() + gateway["type"][1:]
             if gateway["type"]
@@ -270,60 +172,62 @@ def json_to_bpmn(bpmn_data):
         )
         ET.SubElement(
             process,
-            f"{{{ns['bpmn']}}}{gateway_type}",
+            f"{{{_NS['bpmn']}}}{gateway_type}",
             id=gateway["id"],
             name=gateway["name"],
         )
 
-    for flow in bpmn_data["flows"]:
+    for flow in model["flows"]:
         ET.SubElement(
             process,
-            f"{{{ns['bpmn']}}}sequenceFlow",
+            f"{{{_NS['bpmn']}}}sequenceFlow",
             id=flow["id"],
             sourceRef=flow["source"],
             targetRef=flow["target"],
         )
 
-    # BPMNDI section
+    return definitions
+
+
+def _add_diagram(definitions, model):
+    """Add the BPMN diagram interchange (layout + shapes + edges).
+
+    Sizes every node, computes a layered layout, then emits a BPMNShape for
+    each node and a BPMNEdge (right-centre of source to left-centre of target)
+    for each flow. ``verify`` upstream guarantees every node and flow endpoint
+    exists, so positions are looked up directly.
+    """
     bpmn_di = ET.SubElement(
-        definitions, f"{{{ns['bpmndi']}}}BPMNDiagram", attrib={"id": "BPMNDiagram_1"}
+        definitions, f"{{{_NS['bpmndi']}}}BPMNDiagram", attrib={"id": "BPMNDiagram_1"}
     )
     bpmn_plane = ET.SubElement(
         bpmn_di,
-        f"{{{ns['bpmndi']}}}BPMNPlane",
+        f"{{{_NS['bpmndi']}}}BPMNPlane",
         attrib={"id": "BPMNPlane_1", "bpmnElement": "Process_1"},
     )
 
-    # Compute a proper layout so every element gets unique coordinates.
-    _bpmn_sizes: dict[str, dict] = {}
-    for event in bpmn_data["events"]:
-        _bpmn_sizes[event["id"]] = {"w": _BPMN_EVENT_W, "h": _BPMN_EVENT_H}
-    for task in bpmn_data["tasks"]:
-        _bpmn_sizes[task["id"]] = {"w": _BPMN_TASK_W, "h": _BPMN_TASK_H}
-    for gateway in bpmn_data["gateways"]:
-        _bpmn_sizes[gateway["id"]] = {"w": _BPMN_GATEWAY_W, "h": _BPMN_GATEWAY_H}
+    sizes: dict[str, dict] = {}
+    for event in model["events"]:
+        sizes[event["id"]] = {"w": _BPMN_EVENT_W, "h": _BPMN_EVENT_H}
+    for task in model["tasks"]:
+        sizes[task["id"]] = {"w": _BPMN_TASK_W, "h": _BPMN_TASK_H}
+    for gateway in model["gateways"]:
+        sizes[gateway["id"]] = {"w": _BPMN_GATEWAY_W, "h": _BPMN_GATEWAY_H}
 
     positions = _layered_layout(
-        _bpmn_sizes,
-        bpmn_data["flows"],
-        h_gap=80,
-        v_gap=50,
-        x_offset=50,
-        y_offset=50,
+        sizes, model["flows"], h_gap=80, v_gap=50, x_offset=50, y_offset=50
     )
 
-    # Generate diagram elements for tasks, events, gateways
-    for element in bpmn_data["tasks"] + bpmn_data["events"] + bpmn_data["gateways"]:
+    for element in model["tasks"] + model["events"] + model["gateways"]:
         bpmn_shape = ET.SubElement(
             bpmn_plane,
-            f"{{{ns['bpmndi']}}}BPMNShape",
+            f"{{{_NS['bpmndi']}}}BPMNShape",
             attrib={"id": f"{element['id']}_di", "bpmnElement": element["id"]},
         )
-        default_size = _bpmn_sizes.get(element["id"], {"w": _BPMN_TASK_W, "h": _BPMN_TASK_H})
-        pos = positions.get(element["id"], {"x": 50, "y": 50, **default_size})
+        pos = positions[element["id"]]
         ET.SubElement(
             bpmn_shape,
-            f"{{{ns['dc']}}}Bounds",
+            f"{{{_NS['dc']}}}Bounds",
             attrib={
                 "x": str(pos["x"]),
                 "y": str(pos["y"]),
@@ -332,35 +236,42 @@ def json_to_bpmn(bpmn_data):
             },
         )
 
-    # Generate diagram elements for flows with waypoints derived from the layout.
-    for flow in bpmn_data["flows"]:
+    for flow in model["flows"]:
         bpmn_edge = ET.SubElement(
             bpmn_plane,
-            f"{{{ns['bpmndi']}}}BPMNEdge",
+            f"{{{_NS['bpmndi']}}}BPMNEdge",
             attrib={"id": f"{flow['id']}_di", "bpmnElement": flow["id"]},
         )
-        src = positions.get(flow["source"], {"x": 50, "y": 50, "w": _BPMN_TASK_W, "h": _BPMN_TASK_H})
-        tgt = positions.get(flow["target"], {"x": 230, "y": 50, "w": _BPMN_TASK_W, "h": _BPMN_TASK_H})
+        src = positions[flow["source"]]
+        tgt = positions[flow["target"]]
         # Connect the right-centre of the source to the left-centre of the target.
         waypoints = [
             {"x": str(src["x"] + src["w"]), "y": str(src["y"] + src["h"] // 2)},
-            {"x": str(tgt["x"]),             "y": str(tgt["y"] + tgt["h"] // 2)},
+            {"x": str(tgt["x"]), "y": str(tgt["y"] + tgt["h"] // 2)},
         ]
         for waypoint in waypoints:
             ET.SubElement(
                 bpmn_edge,
-                f"{{{ns['di']}}}waypoint",
+                f"{{{_NS['di']}}}waypoint",
                 attrib={"x": waypoint["x"], "y": waypoint["y"]},
             )
 
-    logger.debug("BPMN XML generation complete")
 
-    # Pretty-print in place and return the string; no file is written (#43).
+def json_to_bpmn(model):
+    """Convert a validated logical process model into BPMN 2.0 XML.
+
+    Builds the semantic process, lays it out and draws the diagram, then
+    returns the serialized XML string.
+    """
+    logger.info(
+        "Converting model to BPMN",
+        extra={k: len(model[k]) for k in ("events", "tasks", "gateways", "flows")},
+    )
+    definitions = _build_semantic_process(model)
+    _add_diagram(definitions, model)
+
     tree = ET.ElementTree(definitions)
     ET.indent(tree, space="  ", level=0)
-
-    bpmn_string = ET.tostring(
-        definitions, encoding="utf-8", xml_declaration=True
-    ).decode("utf-8")
-
-    return bpmn_string
+    return ET.tostring(definitions, encoding="utf-8", xml_declaration=True).decode(
+        "utf-8"
+    )
