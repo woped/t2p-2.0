@@ -170,6 +170,33 @@ def test_v2_generate_relays_connector_4xx(mock_cc, client):
 
 
 @patch("app.api.routes.ConnectorClient")
+def test_v2_generate_relays_4xx_status_when_error_body_is_malformed(mock_cc, client):
+    # The connector returned a 4xx but its body is not the expected
+    # {"error": {...}} shape. The status is still relayed, with a synthesized
+    # invalid_request body rather than passing the unusable body through.
+    mock_cc.return_value.generate.side_effect = ConnectorClientError(
+        400, {"unexpected": "shape"}
+    )
+
+    resp = client.post("/v2/generate/bpmn", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 400
+    assert resp.get_json()["error"]["code"] == "invalid_request"
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_v2_generate_unexpected_error_returns_internal_error_500(mock_cc, client):
+    # An error that is none of the known connector/model failures must not leak
+    # as an unhandled 500; it is mapped to a structured internal_error.
+    mock_cc.return_value.generate.side_effect = RuntimeError("boom")
+
+    resp = client.post("/v2/generate/bpmn", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 500
+    assert resp.get_json()["error"]["code"] == "internal_error"
+
+
+@patch("app.api.routes.ConnectorClient")
 def test_v2_generate_invalid_model_returns_500(mock_cc, client):
     # The connector replied, but the model is unreadable: surfaced as
     # invalid_model rather than a generic internal error.

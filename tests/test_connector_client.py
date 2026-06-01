@@ -184,3 +184,45 @@ def test_list_models_missing_field_raises(mock_get, connector, app):
             connector.list_models()
 
     assert "models" in str(exc_info.value)
+
+
+@patch("app.backend.connector_client.requests.get")
+def test_list_models_invalid_json_raises(mock_get, connector, app):
+    # A 200 with an unparseable body is an upstream failure, not a usable list.
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.side_effect = ValueError("no json")
+
+    with app.app_context():
+        with pytest.raises(ConnectorError) as exc_info:
+            connector.list_models()
+
+    assert "invalid JSON" in str(exc_info.value)
+
+
+@patch("app.backend.connector_client.requests.post")
+def test_generate_4xx_with_non_json_body_still_relays_status(mock_post, connector, app):
+    # A 4xx whose body is not JSON (e.g. an HTML error page or empty body) must
+    # still be relayed as a client error with its status preserved, so the route
+    # can pass the rejection through rather than masking it as a 500. The error
+    # body is simply absent.
+    mock_post.return_value.status_code = 401
+    mock_post.return_value.json.side_effect = ValueError("not json")
+
+    with app.app_context():
+        with pytest.raises(ConnectorClientError) as exc_info:
+            connector.generate("Bearer t", "text", "openai", "gpt-4o")
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.error_body is None
+
+
+@patch("app.backend.connector_client.requests.post")
+def test_generate_status_500_is_upstream_not_client_error(mock_post, connector, app):
+    # The 4xx/5xx split is a boundary: a 5xx is an upstream failure the caller
+    # cannot fix by changing input, so it must be ConnectorError, not a relayable
+    # ConnectorClientError.
+    mock_post.return_value.status_code = 500
+
+    with app.app_context():
+        with pytest.raises(ConnectorError):
+            connector.generate("Bearer t", "text", "openai", "gpt-4o")

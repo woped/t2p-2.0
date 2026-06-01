@@ -3,8 +3,10 @@ Tests for API routes in app.api.routes
 """
 
 import pytest
+import requests
 from unittest.mock import Mock, patch
 
+from app.backend.connector_client import ConnectorError, ConnectorClientError
 from tests.sample_models import RAW_MODEL_JSON
 
 
@@ -92,3 +94,42 @@ class TestOperationalEndpoints:
         assert response.status_code == 200
         assert response.get_json() == {"success": True}
         assert "Deprecation" not in response.headers
+
+
+class TestLegacyGenerateErrors:
+    """The legacy /generate_* endpoints own their own validation and error
+    mapping (unlike the v2 path, which delegates to the connector). These cover
+    the failure branches: the happy paths are exercised elsewhere."""
+
+    def test_missing_api_key_returns_400(self, client):
+        # The legacy contract requires both 'text' and 'api_key' in the body.
+        response = client.post("/generate_bpmn", json={"text": "x"})
+        assert response.status_code == 400
+        assert "api_key" in response.get_json()["error"]
+
+    @patch("app.api.routes.ConnectorClient")
+    def test_connector_unreachable_returns_500(self, mock_cc, client):
+        mock_cc.return_value.generate.side_effect = ConnectorError("down")
+        response = client.post("/generate_bpmn", json={"text": "x", "api_key": "k"})
+        assert response.status_code == 500
+        assert response.get_json()["error"] == "LLM API connector error."
+
+    @patch("app.api.routes.ConnectorClient")
+    def test_connector_client_error_returns_500(self, mock_cc, client):
+        # A 4xx/bad reply from the connector surfaces as an invalid-response 500
+        # on the legacy path (it has no relay semantics, unlike v2).
+        mock_cc.return_value.generate.side_effect = ConnectorClientError(400, None)
+        response = client.post("/generate_bpmn", json={"text": "x", "api_key": "k"})
+        assert response.status_code == 500
+        assert response.get_json()["error"] == "Invalid response from LLM API."
+
+    @patch("app.api.routes.ModelTransformer")
+    @patch("app.api.routes.ConnectorClient")
+    def test_pnml_transform_failure_returns_500(self, mock_cc, mock_mt, client):
+        mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+        mock_mt.return_value.transform.side_effect = (
+            requests.exceptions.RequestException("transformer down")
+        )
+        response = client.post("/generate_pnml", json={"text": "x", "api_key": "k"})
+        assert response.status_code == 500
+        assert response.get_json()["error"] == "BPMN to PNML transformation failed."
