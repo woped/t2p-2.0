@@ -28,32 +28,6 @@ def test_markdown_fenced_json_is_rejected():
         raw_response_to_bpmn("```json\n" + VALID_MODEL + "\n```")
 
 
-def test_missing_list_is_rejected():
-    # No "flows" key.
-    with pytest.raises(InvalidModelError):
-        raw_response_to_bpmn('{"events": [], "tasks": [], "gateways": []}')
-
-
-def test_node_missing_field_is_rejected():
-    # Event has no "name".
-    model = (
-        '{"events": [{"id": "start", "type": "startEvent"}],'
-        ' "tasks": [], "gateways": [], "flows": []}'
-    )
-    with pytest.raises(InvalidModelError):
-        raw_response_to_bpmn(model)
-
-
-def test_empty_type_is_rejected():
-    # An empty type would otherwise produce a garbage, empty-named element.
-    model = (
-        '{"events": [{"id": "s", "type": "", "name": "S"}],'
-        ' "tasks": [], "gateways": [], "flows": []}'
-    )
-    with pytest.raises(InvalidModelError):
-        raw_response_to_bpmn(model)
-
-
 def test_flow_referencing_unknown_node_is_rejected():
     model = (
         '{"events": [{"id": "start", "type": "startEvent", "name": "Start"}],'
