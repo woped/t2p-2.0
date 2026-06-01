@@ -5,18 +5,7 @@ Tests for API routes in app.api.routes
 import pytest
 from unittest.mock import Mock, patch
 
-
-RAW_MODEL_JSON = """{
-  "events": [
-    {"id": "start", "type": "startEvent", "name": "Start"},
-    {"id": "end", "type": "endEvent", "name": "End"}
-  ],
-  "tasks": [],
-  "gateways": [],
-  "flows": [
-    {"id": "flow", "type": "sequenceFlow", "source": "start", "target": "end"}
-  ]
-}"""
+from tests.sample_models import RAW_MODEL_JSON
 
 
 @pytest.fixture

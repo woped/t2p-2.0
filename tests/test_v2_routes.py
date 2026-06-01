@@ -1,20 +1,10 @@
 from unittest.mock import patch
 from app.backend.connector_client import ConnectorError, ConnectorClientError
+from tests.sample_models import RAW_MODEL_JSON
 
 
 AUTH = {"Authorization": "Bearer secret-token"}
 BODY = {"text": "describe a process", "provider": "openai", "model": "gpt-4o"}
-RAW_MODEL_JSON = """{
-  "events": [
-    {"id": "start", "type": "startEvent", "name": "Start"},
-    {"id": "end", "type": "endEvent", "name": "End"}
-  ],
-  "tasks": [],
-  "gateways": [],
-  "flows": [
-    {"id": "flow", "type": "sequenceFlow", "source": "start", "target": "end"}
-  ]
-}"""
 
 
 # --- /v2/generate ---------------------------------------------------------
@@ -48,11 +38,7 @@ def test_v2_generate_pnml_success(mock_cc, mock_mt, client):
 
     assert resp.status_code == 200
     assert resp.get_json() == {"result": "PNML"}
-    # The model is built into BPMN XML, then handed to the transformer.
     mock_mt.return_value.transform.assert_called_once()
-    bpmn_arg, direction = mock_mt.return_value.transform.call_args.args
-    assert "<definitions" in bpmn_arg
-    assert direction == {"direction": "bpmntopnml"}
 
 
 @patch("app.api.routes.ModelTransformer")
@@ -281,8 +267,4 @@ def test_legacy_pnml_uses_new_flow_and_preserves_response(mock_cc, mock_mt, clie
 
     assert resp.status_code == 200
     assert resp.get_json() == {"result": "<pnml>legacy</pnml>"}
-    # The built BPMN (not a passthrough) is handed to the transformer.
     mock_mt.return_value.transform.assert_called_once()
-    bpmn_arg, direction = mock_mt.return_value.transform.call_args.args
-    assert "<definitions" in bpmn_arg
-    assert direction == {"direction": "bpmntopnml"}

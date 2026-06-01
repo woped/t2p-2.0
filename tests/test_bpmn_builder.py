@@ -1,19 +1,7 @@
 import pytest
 
 from app.backend.bpmn_builder import InvalidModelError, raw_response_to_bpmn
-
-
-VALID_MODEL = """{
-  "events": [
-    {"id": "start", "type": "startEvent", "name": "Start"},
-    {"id": "end", "type": "endEvent", "name": "End"}
-  ],
-  "tasks": [],
-  "gateways": [],
-  "flows": [
-    {"id": "flow", "type": "sequenceFlow", "source": "start", "target": "end"}
-  ]
-}"""
+from tests.sample_models import RAW_MODEL_JSON as VALID_MODEL
 
 
 def test_valid_model_builds_bpmn():
