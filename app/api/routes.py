@@ -16,6 +16,7 @@ from app.backend.connector_client import (
     ConnectorError,
 )
 from app.backend.modeltransformer import ModelTransformer
+from app.backend.xml_parser import assign_pnml_coordinates
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
@@ -75,7 +76,8 @@ def _generate_bpmn(authorization, text, provider, model):
 
 
 def _transform_to_pnml(bpmn_xml):
-    return ModelTransformer().transform(bpmn_xml, {"direction": "bpmntopnml"})
+    pnml_xml = ModelTransformer().transform(bpmn_xml, {"direction": "bpmntopnml"})
+    return assign_pnml_coordinates(pnml_xml)
 
 
 def _legacy_generate(target):

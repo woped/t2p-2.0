@@ -1,7 +1,7 @@
 import xml.etree.ElementTree as ET
 
 import pytest
-from app.backend.xml_parser import json_to_bpmn
+from app.backend.xml_parser import assign_pnml_coordinates, json_to_bpmn
 
 _BPMNDI = "http://www.omg.org/spec/BPMN/20100524/DI"
 
@@ -327,3 +327,37 @@ def test_unknown_event_type_maps_to_intermediate_catch_event():
     assert counts.get("intermediateCatchEvent") == 1
     assert counts.get("startEvent") == 1
     assert counts.get("endEvent") == 1
+
+
+def test_assign_pnml_coordinates_lays_out_each_node():
+    """The transformer returns PNML with placeholder coordinates; the post-step
+    must lay the net out so every place/transition gets its own
+    <graphics><position> rather than all overlapping at one point."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p1'/>"
+        "<transition id='t1'/>"
+        "<place id='p2'/>"
+        "<arc id='a1' source='p1' target='t1'/>"
+        "<arc id='a2' source='t1' target='p2'/>"
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+
+    coords = {}
+    for node in root.iter():
+        if node.tag.split("}")[-1] in ("place", "transition"):
+            position = node.find("graphics/position")
+            assert position is not None, f"{node.get('id')} got no position"
+            coords[node.get("id")] = (position.get("x"), position.get("y"))
+
+    # Every node is positioned, and the layered layout spreads them out
+    # (not all stacked on the same placeholder coordinate).
+    assert set(coords) == {"p1", "t1", "p2"}
+    assert len(set(coords.values())) == 3
+
+
+def test_assign_pnml_coordinates_passes_through_non_xml():
+    """A non-XML payload (e.g. a transformer error string) is returned as-is."""
+    assert assign_pnml_coordinates("not xml") == "not xml"

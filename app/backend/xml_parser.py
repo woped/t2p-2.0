@@ -12,6 +12,9 @@ _BPMN_EVENT_W, _BPMN_EVENT_H = 36, 36
 _BPMN_TASK_W, _BPMN_TASK_H = 100, 80
 _BPMN_GATEWAY_W, _BPMN_GATEWAY_H = 50, 50
 
+_PNML_PLACE_W, _PNML_PLACE_H = 50, 50
+_PNML_TRANS_W, _PNML_TRANS_H = 50, 30
+
 # BPMN namespaces, registered once so ET.tostring emits the expected prefixes.
 _NS = {
     "bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL",
@@ -120,6 +123,94 @@ def _layered_layout(
             y += h + v_gap
 
     return positions
+
+
+def assign_pnml_coordinates(pnml_xml):
+    """Parse a PNML XML string and assign proper layout coordinates to all
+    places and transitions.
+
+    Uses the same layered layout algorithm as the BPMN generator.  In PNML,
+    ``<graphics><position>`` holds *centre* coordinates, so positions returned
+    by ``_layered_layout`` (top-left) are shifted by half the element size.
+
+    If *pnml_xml* is not valid XML the original string is returned unchanged.
+
+    Args:
+        pnml_xml: PNML XML string (with or without ``<?xml ...?>`` declaration).
+
+    Returns:
+        Updated PNML XML string.
+    """
+    if not pnml_xml or not isinstance(pnml_xml, str):
+        return pnml_xml
+
+    try:
+        root = ET.fromstring(pnml_xml)
+    except ET.ParseError:
+        logger.warning("assign_pnml_coordinates: not valid XML – layout skipped")
+        return pnml_xml
+
+    # Detect Clark-notation namespace prefix, e.g. '{http://www.pnml.org/...}'.
+    raw_tag = root.tag
+    ns_prefix = (
+        "{" + raw_tag[1 : raw_tag.index("}")] + "}" if raw_tag.startswith("{") else ""
+    )
+
+    # Register the namespace so ET.tostring() preserves the default namespace.
+    if ns_prefix:
+        ET.register_namespace("", ns_prefix[1:-1])
+
+    # Collect all places and transitions from the entire tree (handles
+    # nested <pnml><net><page>... hierarchies).
+    elements_by_id: dict[str, dict] = {}
+    elem_xml_map: dict[str, ET.Element] = {}
+
+    for place in root.iter(f"{ns_prefix}place"):
+        pid = place.get("id")
+        if pid:
+            elements_by_id[pid] = {"w": _PNML_PLACE_W, "h": _PNML_PLACE_H}
+            elem_xml_map[pid] = place
+
+    for trans in root.iter(f"{ns_prefix}transition"):
+        tid = trans.get("id")
+        if tid:
+            elements_by_id[tid] = {"w": _PNML_TRANS_W, "h": _PNML_TRANS_H}
+            elem_xml_map[tid] = trans
+
+    if not elements_by_id:
+        return pnml_xml  # nothing to lay out
+
+    flows = [
+        {"source": arc.get("source", ""), "target": arc.get("target", "")}
+        for arc in root.iter(f"{ns_prefix}arc")
+        if arc.get("source") and arc.get("target")
+    ]
+
+    positions = _layered_layout(
+        elements_by_id, flows, h_gap=80, v_gap=50, x_offset=100, y_offset=100
+    )
+
+    for nid, pos in positions.items():
+        elem = elem_xml_map.get(nid)
+        if elem is None:
+            continue
+
+        # PNML <position> stores centre coordinates.
+        cx = pos["x"] + pos["w"] // 2
+        cy = pos["y"] + pos["h"] // 2
+
+        graphics = elem.find(f"{ns_prefix}graphics")
+        if graphics is None:
+            graphics = ET.SubElement(elem, f"{ns_prefix}graphics")
+
+        position_el = graphics.find(f"{ns_prefix}position")
+        if position_el is None:
+            position_el = ET.SubElement(graphics, f"{ns_prefix}position")
+        position_el.set("x", str(cx))
+        position_el.set("y", str(cy))
+
+    ET.indent(ET.ElementTree(root), space="  ", level=0)
+    return ET.tostring(root, encoding="unicode")
 
 
 def _build_semantic_process(model):
