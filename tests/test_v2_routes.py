@@ -41,16 +41,18 @@ def test_v2_generate_bpmn_success(mock_cc, client):
 @patch("app.api.routes.ModelTransformer")
 @patch("app.api.routes.ConnectorClient")
 def test_v2_generate_pnml_success(mock_cc, mock_mt, client):
-    mock_cc.return_value.generate.return_value = "<bpmn>BPMN</bpmn>"
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
     mock_mt.return_value.transform.return_value = "PNML"
 
     resp = client.post("/v2/generate/pnml", json=BODY, headers=AUTH)
 
     assert resp.status_code == 200
     assert resp.get_json() == {"result": "PNML"}
-    mock_mt.return_value.transform.assert_called_once_with(
-        "<bpmn>BPMN</bpmn>", {"direction": "bpmntopnml"}
-    )
+    # The model is built into BPMN XML, then handed to the transformer.
+    mock_mt.return_value.transform.assert_called_once()
+    bpmn_arg, direction = mock_mt.return_value.transform.call_args.args
+    assert "<definitions" in bpmn_arg
+    assert direction == {"direction": "bpmntopnml"}
 
 
 @patch("app.api.routes.ModelTransformer")
@@ -58,7 +60,7 @@ def test_v2_generate_pnml_success(mock_cc, mock_mt, client):
 def test_v2_generate_pnml_transform_error_returns_500(mock_cc, mock_mt, client):
     import requests
 
-    mock_cc.return_value.generate.return_value = "<bpmn>BPMN</bpmn>"
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
     mock_mt.return_value.transform.side_effect = requests.exceptions.RequestException(
         "transformer down"
     )
@@ -181,6 +183,18 @@ def test_v2_generate_relays_connector_4xx(mock_cc, client):
     assert resp.get_json()["error"]["code"] == "invalid_provider"
 
 
+@patch("app.api.routes.ConnectorClient")
+def test_v2_generate_invalid_model_returns_500(mock_cc, client):
+    # The connector replied, but the model is unreadable: surfaced as
+    # invalid_model rather than a generic internal error.
+    mock_cc.return_value.generate.return_value = "not a json model"
+
+    resp = client.post("/v2/generate/bpmn", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 500
+    assert resp.get_json()["error"]["code"] == "invalid_model"
+
+
 # --- /v2/models -----------------------------------------------------------
 
 
@@ -237,15 +251,15 @@ def test_operational_echo_is_not_deprecated(client):
 
 
 @patch("app.api.routes.ConnectorClient")
-def test_legacy_bpmn_uses_default_model_and_preserves_response(mock_cc, client):
-    mock_cc.return_value.generate.return_value = "<bpmn>legacy</bpmn>"
+def test_legacy_bpmn_uses_default_model_and_builds_bpmn(mock_cc, client):
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
 
     resp = client.post(
         "/generate_BPMN", json={"text": "describe a process", "api_key": "secret-token"}
     )
 
     assert resp.status_code == 200
-    assert resp.get_json() == {"result": "<bpmn>legacy</bpmn>"}
+    assert "<definitions" in resp.get_json()["result"]
     assert resp.headers.get("Deprecation") == "@1780272000"
     mock_cc.return_value.generate.assert_called_once_with(
         authorization="Bearer secret-token",
@@ -258,7 +272,7 @@ def test_legacy_bpmn_uses_default_model_and_preserves_response(mock_cc, client):
 @patch("app.api.routes.ModelTransformer")
 @patch("app.api.routes.ConnectorClient")
 def test_legacy_pnml_uses_new_flow_and_preserves_response(mock_cc, mock_mt, client):
-    mock_cc.return_value.generate.return_value = "<bpmn>legacy</bpmn>"
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
     mock_mt.return_value.transform.return_value = "<pnml>legacy</pnml>"
 
     resp = client.post(
@@ -267,6 +281,8 @@ def test_legacy_pnml_uses_new_flow_and_preserves_response(mock_cc, mock_mt, clie
 
     assert resp.status_code == 200
     assert resp.get_json() == {"result": "<pnml>legacy</pnml>"}
-    mock_mt.return_value.transform.assert_called_once_with(
-        "<bpmn>legacy</bpmn>", {"direction": "bpmntopnml"}
-    )
+    # The built BPMN (not a passthrough) is handed to the transformer.
+    mock_mt.return_value.transform.assert_called_once()
+    bpmn_arg, direction = mock_mt.return_value.transform.call_args.args
+    assert "<definitions" in bpmn_arg
+    assert direction == {"direction": "bpmntopnml"}

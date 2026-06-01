@@ -6,6 +6,19 @@ import pytest
 from unittest.mock import Mock, patch
 
 
+RAW_MODEL_JSON = """{
+  "events": [
+    {"id": "start", "type": "startEvent", "name": "Start"},
+    {"id": "end", "type": "endEvent", "name": "End"}
+  ],
+  "tasks": [],
+  "gateways": [],
+  "flows": [
+    {"id": "flow", "type": "sequenceFlow", "source": "start", "target": "end"}
+  ]
+}"""
+
+
 @pytest.fixture
 def app():
     from app import create_app
@@ -65,10 +78,10 @@ class TestDeprecatedEndpoints:
     @pytest.mark.parametrize("path", ["/generate_bpmn", "/generate_BPMN"])
     @patch("app.api.routes.ConnectorClient")
     def test_legacy_bpmn_routes_remain_functional(self, mock_cc, client, path):
-        mock_cc.return_value.generate.return_value = "<bpmn>legacy</bpmn>"
+        mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
         response = client.post(path, json={"text": "x", "api_key": "k"})
         assert response.status_code == 200
-        assert response.get_json() == {"result": "<bpmn>legacy</bpmn>"}
+        assert "<definitions" in response.get_json()["result"]
         assert response.headers.get("Deprecation") == "@1780272000"
 
     @pytest.mark.parametrize("path", ["/generate_pnml", "/generate_PNML"])
@@ -77,7 +90,7 @@ class TestDeprecatedEndpoints:
     def test_legacy_pnml_routes_remain_functional(
         self, mock_cc, mock_transformer, client, path
     ):
-        mock_cc.return_value.generate.return_value = "<bpmn>legacy</bpmn>"
+        mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
         mock_transformer.return_value.transform.return_value = "<pnml>legacy</pnml>"
         response = client.post(path, json={"text": "x", "api_key": "k"})
         assert response.status_code == 200

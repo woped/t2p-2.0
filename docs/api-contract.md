@@ -64,6 +64,7 @@ Error responses share the shape `{ "error": { "code": string, "message": string 
 | 401 | `unauthorized`     | missing or malformed bearer token |
 | 410 | `deprecated`       | the already-sunset `/api_call` endpoint was called |
 | 500 | `upstream_error`   | connector call failed (unreachable, timeout, non-200) |
+| 500 | `invalid_model`    | connector replied, but the process model was unreadable or structurally invalid |
 | 500 | `transform_error`  | the BPMN→PNML transformation service failed (`/v2/generate/pnml` only) |
 | 500 | `internal_error`   | unexpected error |
 
@@ -104,7 +105,9 @@ future world-model processing can consume or enrich the logical model without ca
 XML markup in the LLM exchange. This is intended to reduce markup-related token
 overhead; the actual token reduction must be measured once that workflow is implemented.
 
-T2P owns conversion from the structured JSON process model to BPMN XML.
+T2P owns conversion from the structured JSON process model to BPMN XML. It first
+verifies the model's structure — a reply that cannot be parsed or is structurally
+invalid surfaces as `500 invalid_model` — then converts it.
 `POST /v2/generate/bpmn` converts the JSON to BPMN XML and returns that BPMN.
 `POST /v2/generate/pnml` first converts the JSON to BPMN XML, then sends the XML
 to the model-transformer service (`POST <transformer>/transform`,

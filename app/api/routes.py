@@ -9,7 +9,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api import api_bp
 from app.__init__ import REQUEST_COUNT, REQUEST_LATENCY
-from app.backend.bpmn_builder import raw_response_to_bpmn
+from app.backend.bpmn_builder import InvalidModelError, raw_response_to_bpmn
 from app.backend.connector_client import (
     ConnectorClient,
     ConnectorClientError,
@@ -254,6 +254,17 @@ def _v2_generate(target):
         )
         return _error_response(
             500, "upstream_error", "The LLM API connector is unavailable."
+        )
+    except InvalidModelError as e:
+        status = "500"
+        logger.warning(
+            "Connector returned an invalid process model",
+            extra={"endpoint": endpoint_label, "error": str(e)},
+        )
+        return _error_response(
+            500,
+            "invalid_model",
+            "The LLM API connector returned a process model that could not be processed.",
         )
     except Exception:
         status = "500"

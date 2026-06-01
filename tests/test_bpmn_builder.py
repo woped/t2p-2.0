@@ -1,0 +1,66 @@
+import pytest
+
+from app.backend.bpmn_builder import InvalidModelError, raw_response_to_bpmn
+
+
+VALID_MODEL = """{
+  "events": [
+    {"id": "start", "type": "startEvent", "name": "Start"},
+    {"id": "end", "type": "endEvent", "name": "End"}
+  ],
+  "tasks": [],
+  "gateways": [],
+  "flows": [
+    {"id": "flow", "type": "sequenceFlow", "source": "start", "target": "end"}
+  ]
+}"""
+
+
+def test_valid_model_builds_bpmn():
+    result = raw_response_to_bpmn(VALID_MODEL)
+    assert "<definitions" in result
+    assert "start" in result and "end" in result
+
+
+def test_non_string_is_rejected():
+    with pytest.raises(InvalidModelError):
+        raw_response_to_bpmn({"events": []})
+
+
+def test_non_json_is_rejected():
+    # The raw-XML passthrough tolerance was removed: XML is no longer accepted.
+    with pytest.raises(InvalidModelError):
+        raw_response_to_bpmn("<bpmn>already xml</bpmn>")
+
+
+def test_markdown_fenced_json_is_rejected():
+    # The code-fence stripping tolerance was removed: the connector is expected
+    # to return clean JSON.
+    with pytest.raises(InvalidModelError):
+        raw_response_to_bpmn("```json\n" + VALID_MODEL + "\n```")
+
+
+def test_missing_list_is_rejected():
+    # No "flows" key.
+    with pytest.raises(InvalidModelError):
+        raw_response_to_bpmn('{"events": [], "tasks": [], "gateways": []}')
+
+
+def test_node_missing_field_is_rejected():
+    # Event has no "name".
+    model = (
+        '{"events": [{"id": "start", "type": "startEvent"}],'
+        ' "tasks": [], "gateways": [], "flows": []}'
+    )
+    with pytest.raises(InvalidModelError):
+        raw_response_to_bpmn(model)
+
+
+def test_flow_referencing_unknown_node_is_rejected():
+    model = (
+        '{"events": [{"id": "start", "type": "startEvent", "name": "Start"}],'
+        ' "tasks": [], "gateways": [],'
+        ' "flows": [{"id": "f", "source": "start", "target": "ghost"}]}'
+    )
+    with pytest.raises(InvalidModelError):
+        raw_response_to_bpmn(model)
