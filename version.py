@@ -13,7 +13,7 @@ __build_date__ = None
 __git_commit__ = None
 
 # API version
-__api_version__ = "v1"
+__api_version__ = "v2"
 
 
 def get_version_info():

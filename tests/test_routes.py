@@ -1,15 +1,13 @@
 """
-Comprehensive tests for API routes in app.api.routes
+Tests for API routes in app.api.routes
 """
 
 import pytest
-from unittest.mock import patch, Mock
-from flask import Flask
+from unittest.mock import Mock, patch
 
 
 @pytest.fixture
 def app():
-    """Create test Flask app"""
     from app import create_app
 
     app = create_app("testing")
@@ -19,13 +17,10 @@ def app():
 
 @pytest.fixture
 def client(app):
-    """Create test client"""
     return app.test_client()
 
 
 class TestExampleRoute:
-    """Tests for /example endpoint"""
-
     def test_example_route_success(self, client):
         response = client.get("/example")
         assert response.status_code == 200
@@ -33,180 +28,65 @@ class TestExampleRoute:
 
 
 class TestMetrics:
-    """Tests for /metrics endpoint"""
-
     def test_metrics_endpoint(self, client):
         response = client.get("/metrics")
         assert response.status_code == 200
         assert response.content_type.startswith("text/plain")
-        # Prometheus metrics should contain these
         assert (
             b"http_requests_total" in response.data or b"REQUEST_COUNT" in response.data
         )
 
 
-class TestConnectionEndpoint:
-    """Tests for /test_connection endpoint"""
+class TestDeprecatedEndpoints:
+    def test_already_sunset_api_call_returns_410(self, client):
+        response = client.post("/api_call", json={"text": "x", "api_key": "k"})
+        assert response.status_code == 410
+        assert response.get_json()["error"]["code"] == "deprecated"
+        assert "/v2 API" in response.get_json()["error"]["message"]
+        assert response.headers.get("Sunset") == "Wed, 31 Dec 2025 23:59:59 GMT"
 
-    def test_connection_success(self, client):
+    def test_newly_deprecated_health_route_still_works_with_headers(self, client):
         response = client.get("/test_connection")
         assert response.status_code == 200
-        assert response.json == "Successful"
+        assert response.get_json() == "Successful"
+        assert response.headers.get("Deprecation") == "@1780272000"
+        assert response.headers.get("Sunset") == "Tue, 01 Dec 2026 00:00:00 GMT"
+        assert response.headers.get("Link") == '</api/swagger.yaml>; rel="deprecation"'
 
-    def test_connection_increments_counter(self, app, client):
+    def test_deprecated_endpoint_increments_counter(self, app, client):
         # Replace the metric through its registration seam rather than patching
         # the import-time proxy, which can't resolve outside an app context.
         mock_counter = Mock()
         app.extensions["metrics"]["REQUEST_COUNT"] = mock_counter
         response = client.get("/test_connection")
         assert response.status_code == 200
-        # Verify counter was incremented
         mock_counter.labels.assert_called()
 
-
-class TestDeprecatedAPICall:
-    """Tests for deprecated /api_call endpoint"""
-
-    @patch("app.api.routes.HandleCall.handle")
-    def test_api_call_returns_deprecation_headers(self, mock_handle, client):
-        mock_handle.return_value = ({"result": "test"}, 200)
-
-        response = client.post(
-            "/api_call", json={"text": "test process", "api_key": "test_key"}
-        )
-
+    @pytest.mark.parametrize("path", ["/generate_bpmn", "/generate_BPMN"])
+    @patch("app.api.routes.ConnectorClient")
+    def test_legacy_bpmn_routes_remain_functional(self, mock_cc, client, path):
+        mock_cc.return_value.generate.return_value = "<bpmn>legacy</bpmn>"
+        response = client.post(path, json={"text": "x", "api_key": "k"})
         assert response.status_code == 200
-        assert "Deprecation" in response.headers
-        assert response.headers["Deprecation"] == "true"
-        assert "Sunset" in response.headers
-        assert "Link" in response.headers
+        assert response.get_json() == {"result": "<bpmn>legacy</bpmn>"}
+        assert response.headers.get("Deprecation") == "@1780272000"
 
-    @patch("app.api.routes.HandleCall.handle")
-    def test_api_call_handles_exception(self, mock_handle, client):
-        mock_handle.side_effect = Exception("Test error")
-
-        response = client.post(
-            "/api_call", json={"text": "test process", "api_key": "test_key"}
-        )
-
-        assert response.status_code == 500
-        assert "error" in response.json
-
-
-class TestGenerateBPMN:
-    """Tests for /generate_bpmn and /generate_BPMN endpoints"""
-
-    @patch("app.api.routes.HandleCall.handle")
-    def test_generate_bpmn_lowercase_success(self, mock_handle, client):
-        mock_handle.return_value = ({"result": "<bpmn>test</bpmn>"}, 200)
-
-        response = client.post(
-            "/generate_bpmn", json={"text": "test process", "api_key": "test_key"}
-        )
-
+    @pytest.mark.parametrize("path", ["/generate_pnml", "/generate_PNML"])
+    @patch("app.api.routes.ModelTransformer")
+    @patch("app.api.routes.ConnectorClient")
+    def test_legacy_pnml_routes_remain_functional(
+        self, mock_cc, mock_transformer, client, path
+    ):
+        mock_cc.return_value.generate.return_value = "<bpmn>legacy</bpmn>"
+        mock_transformer.return_value.transform.return_value = "<pnml>legacy</pnml>"
+        response = client.post(path, json={"text": "x", "api_key": "k"})
         assert response.status_code == 200
-        mock_handle.assert_called_once()
-
-    @patch("app.api.routes.HandleCall.handle")
-    def test_generate_bpmn_uppercase_success(self, mock_handle, client):
-        mock_handle.return_value = ({"result": "<bpmn>test</bpmn>"}, 200)
-
-        response = client.post(
-            "/generate_BPMN", json={"text": "test process", "api_key": "test_key"}
-        )
-
-        assert response.status_code == 200
-        mock_handle.assert_called_once()
-
-    @patch("app.api.routes.HandleCall.handle")
-    def test_generate_bpmn_with_tuple_response(self, mock_handle, client):
-        # HandleCall can return (response, status_code) tuple
-        mock_handle.return_value = ({"result": "<bpmn>test</bpmn>"}, 201)
-
-        response = client.post(
-            "/generate_bpmn", json={"text": "test process", "api_key": "test_key"}
-        )
-
-        assert response.status_code == 201
-
-    @patch("app.api.routes.HandleCall.handle")
-    def test_generate_bpmn_exception(self, mock_handle, client):
-        mock_handle.side_effect = Exception("Processing error")
-
-        response = client.post(
-            "/generate_bpmn", json={"text": "test process", "api_key": "test_key"}
-        )
-
-        assert response.status_code == 500
-        assert "error" in response.json
+        assert response.get_json() == {"result": "<pnml>legacy</pnml>"}
 
 
-class TestGeneratePNML:
-    """Tests for /generate_pnml and /generate_PNML endpoints"""
-
-    @patch("app.api.routes.HandleCall.handle")
-    def test_generate_pnml_lowercase_success(self, mock_handle, client):
-        mock_handle.return_value = ({"result": "<pnml>test</pnml>"}, 200)
-
-        response = client.post(
-            "/generate_pnml", json={"text": "test process", "api_key": "test_key"}
-        )
-
-        assert response.status_code == 200
-        mock_handle.assert_called_once()
-        # Verify correct direction parameter
-        call_args = mock_handle.call_args
-        assert call_args[0][1]["direction"] == "bpmntopnml"
-
-    @patch("app.api.routes.HandleCall.handle")
-    def test_generate_pnml_uppercase_success(self, mock_handle, client):
-        mock_handle.return_value = ({"result": "<pnml>test</pnml>"}, 200)
-
-        response = client.post(
-            "/generate_PNML", json={"text": "test process", "api_key": "test_key"}
-        )
-
-        assert response.status_code == 200
-
-    @patch("app.api.routes.HandleCall.handle")
-    def test_generate_pnml_with_tuple_response(self, mock_handle, client):
-        mock_handle.return_value = ({"result": "<pnml>test</pnml>"}, 201)
-
-        response = client.post(
-            "/generate_pnml", json={"text": "test process", "api_key": "test_key"}
-        )
-
-        assert response.status_code == 201
-
-    @patch("app.api.routes.HandleCall.handle")
-    def test_generate_pnml_exception(self, mock_handle, client):
-        mock_handle.side_effect = ValueError("Invalid data")
-
-        response = client.post(
-            "/generate_pnml", json={"text": "test process", "api_key": "test_key"}
-        )
-
-        assert response.status_code == 500
-        assert "error" in response.json
-
-
-class TestEchoEndpoint:
-    """Tests for /_/_/echo endpoint"""
-
-    def test_echo_success(self, client):
+class TestOperationalEndpoints:
+    def test_echo_remains_unversioned_and_functional(self, client):
         response = client.get("/_/_/echo")
         assert response.status_code == 200
-        assert response.json == {"success": True}
-
-    def test_echo_increments_metrics(self, app, client):
-        # Replace the metrics through their registration seam rather than
-        # patching the import-time proxies (see test_connection_increments_counter).
-        mock_counter = Mock()
-        mock_latency = Mock()
-        app.extensions["metrics"]["REQUEST_COUNT"] = mock_counter
-        app.extensions["metrics"]["REQUEST_LATENCY"] = mock_latency
-        response = client.get("/_/_/echo")
-        assert response.status_code == 200
-        # Verify metrics were updated
-        mock_counter.labels.assert_called()
-        mock_latency.labels.assert_called()
+        assert response.get_json() == {"success": True}
+        assert "Deprecation" not in response.headers

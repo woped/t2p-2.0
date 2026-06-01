@@ -1,0 +1,578 @@
+{
+  "info": {
+    "_postman_id": "d43bb3e9-280f-48db-bb58-388c74b81c96",
+    "name": "WOPED T2P API Refactor Demo",
+    "description": "Demo collection for the versioned T2P orchestrator API and its internal LLM connector contract. Each request includes a saved response so the collection can back a Postman mock server before all services are runnable.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{apiKey}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.request.headers.upsert({ key: 'Accept', value: 'application/json' });"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5001"
+    },
+    {
+      "key": "connectorBaseUrl",
+      "value": "http://localhost:5000"
+    },
+    {
+      "key": "apiKey",
+      "value": "replace-with-provider-api-key",
+      "type": "string"
+    },
+    {
+      "key": "provider",
+      "value": "openai"
+    },
+    {
+      "key": "model",
+      "value": "gpt-4o"
+    },
+    {
+      "key": "processText",
+      "value": "A customer submits an order. Check availability. If available, confirm the order; otherwise reject it."
+    }
+  ],
+  "item": [
+    {
+      "name": "1 - Public v2 API",
+      "description": "The API consumers should integrate with. Demonstrates versioning, discoverability, bearer authentication, and target-specific generation endpoints.",
+      "item": [
+        {
+          "name": "Health - stable v2 liveness",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-mock-response-name",
+                "value": "Health OK"
+              }
+            ],
+            "url": "{{baseUrl}}/v2/health",
+            "description": "A shallow health request that does not depend on the connector or model transformer."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Health is available', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Health has the stable v2 shape', function () { pm.expect(pm.response.json()).to.eql({ status: 'ok' }); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Health OK",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"status\": \"ok\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Models - discover provider and model choices",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-mock-response-name",
+                "value": "Models available"
+              }
+            ],
+            "url": "{{baseUrl}}/v2/models",
+            "description": "T2P proxies the connector-owned model registry instead of hard-coding a provider in the public request contract."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Models can be discovered', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Models expose provider and model', function () { const first = pm.response.json().models[0]; pm.expect(first).to.have.property('provider'); pm.expect(first).to.have.property('model'); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Models available",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"models\": [\n    { \"provider\": \"openai\", \"model\": \"gpt-4o\", \"default\": true },\n    { \"provider\": \"gemini\", \"model\": \"gemini-1.5-pro\", \"default\": false }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Generate BPMN - versioned authenticated request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-mock-response-name",
+                "value": "BPMN generated"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"{{processText}}\",\n  \"provider\": \"{{provider}}\",\n  \"model\": \"{{model}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/v2/generate/bpmn",
+            "description": "The provider key is now sent in the Authorization header, not embedded in the JSON body."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('BPMN generation succeeds', function () { pm.response.to.have.status(200); });",
+                  "pm.test('A generated result is returned', function () { pm.expect(pm.response.json().result).to.be.a('string').and.not.empty; });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "BPMN generated",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"result\": \"<?xml version=\\\"1.0\\\"?><definitions><process id=\\\"generated-process\\\" /></definitions>\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Generate PNML - explicit output endpoint",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-mock-response-name",
+                "value": "PNML generated"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"{{processText}}\",\n  \"provider\": \"{{provider}}\",\n  \"model\": \"{{model}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/v2/generate/pnml",
+            "description": "The PNML route exposes the orchestration step: connector output is turned into BPMN XML and then transformed into PNML."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('PNML generation succeeds', function () { pm.response.to.have.status(200); });",
+                  "pm.test('PNML result is returned', function () { pm.expect(pm.response.json().result).to.include('<pnml'); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "PNML generated",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"result\": \"<?xml version=\\\"1.0\\\"?><pnml><net id=\\\"generated-process\\\" /></pnml>\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2 - Contract errors and migration",
+      "description": "Responses that can be executed locally without a provider or downstream service. These make the refactor benefits visible even before end-to-end generation is ready.",
+      "item": [
+        {
+          "name": "Generate BPMN - missing bearer token",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-mock-response-name",
+                "value": "Unauthorized"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"{{processText}}\",\n  \"provider\": \"{{provider}}\",\n  \"model\": \"{{model}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/v2/generate/bpmn",
+            "description": "Demonstrates that credentials no longer belong in the request body."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Missing credentials are rejected', function () { pm.response.to.have.status(401); });",
+                  "pm.test('Error code is stable', function () { pm.expect(pm.response.json().error.code).to.eql('unauthorized'); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": {\n    \"code\": \"unauthorized\",\n    \"message\": \"Missing or malformed bearer token.\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Generate BPMN - invalid request body",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-mock-response-name",
+                "value": "Invalid request"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"{{processText}}\",\n  \"provider\": \"{{provider}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{baseUrl}}/v2/generate/bpmn",
+            "description": "The request is missing model; validation happens before downstream calls."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Missing fields are rejected', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Client can branch on error code', function () { pm.expect(pm.response.json().error.code).to.eql('invalid_request'); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Invalid request",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": {\n    \"code\": \"invalid_request\",\n    \"message\": \"Missing or empty field(s): model.\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Removed legacy /api_call - explicit migration signal",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-mock-response-name",
+                "value": "Removed endpoint"
+              }
+            ],
+            "url": "{{baseUrl}}/api_call",
+            "description": "The already-sunset endpoint now returns 410 with a migration Link header rather than failing ambiguously."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Removed operation is Gone', function () { pm.response.to.have.status(410); });",
+                  "pm.test('Migration is discoverable', function () { pm.expect(pm.response.headers.get('Link')).to.include('migration'); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Removed endpoint",
+              "status": "Gone",
+              "code": 410,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Sunset",
+                  "value": "Wed, 31 Dec 2025 23:59:59 GMT"
+                },
+                {
+                  "key": "Link",
+                  "value": "<https://woped.dhbw-karlsruhe.de/docs/migration>; rel=\"deprecation\""
+                }
+              ],
+              "body": "{\n  \"error\": {\n    \"code\": \"deprecated\",\n    \"message\": \"This endpoint was removed after its sunset date; use the /v2 API.\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Compatible legacy health - deprecation headers",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-mock-response-name",
+                "value": "Legacy compatibility"
+              }
+            ],
+            "url": "{{baseUrl}}/test_connection",
+            "description": "A still-supported legacy operation signals its scheduled sunset while clients migrate."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Compatibility operation still responds', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Sunset is visible', function () { pm.expect(pm.response.headers.get('Sunset')).to.eql('Tue, 01 Dec 2026 00:00:00 GMT'); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Legacy compatibility",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Deprecation",
+                  "value": "@1780272000"
+                },
+                {
+                  "key": "Sunset",
+                  "value": "Tue, 01 Dec 2026 00:00:00 GMT"
+                },
+                {
+                  "key": "Link",
+                  "value": "<https://woped.dhbw-karlsruhe.de/docs/migration>; rel=\"deprecation\""
+                }
+              ],
+              "body": "\"Successful\""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3 - Internal connector (optional)",
+      "description": "Use this folder only to explain service separation. It calls the connector directly, not the public T2P API.",
+      "item": [
+        {
+          "name": "Connector models - registry ownership",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-mock-response-name",
+                "value": "Connector models"
+              }
+            ],
+            "url": "{{connectorBaseUrl}}/models",
+            "description": "The connector owns provider/model capability information; the orchestrator exposes it through /v2/models."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Connector registry responds', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Connector models",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"models\": [\n    { \"provider\": \"openai\", \"model\": \"gpt-4o\", \"default\": true },\n    { \"provider\": \"gemini\", \"model\": \"gemini-1.5-pro\", \"default\": false }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Connector generate - invalid provider without LLM call",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "x-mock-response-name",
+                "value": "Unsupported connector model"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_text\": \"{{processText}}\",\n  \"provider\": \"unknown-provider\",\n  \"model\": \"unknown-model\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{connectorBaseUrl}}/generate",
+            "description": "This validation occurs before any billable external provider call."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Unsupported provider is rejected', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Error identifies provider issue', function () { pm.expect(pm.response.json().error.code).to.eql('invalid_provider'); });"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Unsupported connector model",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": {\n    \"code\": \"invalid_provider\",\n    \"message\": \"Unsupported provider/model combination.\"\n  }\n}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
