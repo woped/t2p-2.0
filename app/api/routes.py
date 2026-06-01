@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import time
@@ -10,13 +9,13 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api import api_bp
 from app.__init__ import REQUEST_COUNT, REQUEST_LATENCY
+from app.backend.bpmn_builder import raw_response_to_bpmn
 from app.backend.connector_client import (
     ConnectorClient,
     ConnectorClientError,
     ConnectorError,
 )
 from app.backend.modeltransformer import ModelTransformer
-from app.backend.xml_parser import json_to_bpmn
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
@@ -65,26 +64,6 @@ def _removed_api_call_response():
     return response
 
 
-def _raw_response_to_bpmn(raw_response):
-    """Convert the connector's LLM JSON response to BPMN XML."""
-    if not isinstance(raw_response, str):
-        raise ValueError("LLM API connector response must be text.")
-
-    content = raw_response.strip()
-    if content.startswith("<"):
-        return content
-    if content.startswith("```"):
-        content = content.split("\n", 1)[1] if "\n" in content else content[3:]
-        if content.endswith("```"):
-            content = content.rsplit("```", 1)[0]
-        content = content.strip()
-
-    try:
-        return json_to_bpmn(json.loads(content))
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise ValueError("LLM API connector returned invalid BPMN JSON.") from exc
-
-
 def _generate_bpmn(authorization, text, provider, model):
     raw_response = ConnectorClient().generate(
         authorization=authorization,
@@ -92,7 +71,7 @@ def _generate_bpmn(authorization, text, provider, model):
         provider=provider,
         model=model,
     )
-    return _raw_response_to_bpmn(raw_response)
+    return raw_response_to_bpmn(raw_response)
 
 
 def _transform_to_pnml(bpmn_xml):
