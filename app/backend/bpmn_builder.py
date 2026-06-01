@@ -36,8 +36,8 @@ def _verify(model):
     """Quick structural check of the logical model; raises InvalidModelError.
 
     Confirms shape only (it does not repair anything): the four element groups
-    are lists, every node has id/type/name, and every flow has id/source/target
-    and connects existing nodes.
+    are lists, every node has id, a non-empty type and name, and every flow has
+    id/source/target and connects existing nodes.
     """
     _require(isinstance(model, dict), "Process model must be a JSON object.")
     for group in (*_NODE_GROUPS, "flows"):
@@ -47,8 +47,10 @@ def _verify(model):
     for group in _NODE_GROUPS:
         for el in model[group]:
             _require(
-                isinstance(el, dict) and all(k in el for k in ("id", "type", "name")),
-                f"Each '{group}' entry needs id, type and name.",
+                isinstance(el, dict)
+                and all(k in el for k in ("id", "type", "name"))
+                and el["type"],
+                f"Each '{group}' entry needs id, a non-empty type, and name.",
             )
             node_ids.add(el["id"])
 

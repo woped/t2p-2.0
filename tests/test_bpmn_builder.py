@@ -44,6 +44,16 @@ def test_node_missing_field_is_rejected():
         raw_response_to_bpmn(model)
 
 
+def test_empty_type_is_rejected():
+    # An empty type would otherwise produce a garbage, empty-named element.
+    model = (
+        '{"events": [{"id": "s", "type": "", "name": "S"}],'
+        ' "tasks": [], "gateways": [], "flows": []}'
+    )
+    with pytest.raises(InvalidModelError):
+        raw_response_to_bpmn(model)
+
+
 def test_flow_referencing_unknown_node_is_rejected():
     model = (
         '{"events": [{"id": "start", "type": "startEvent", "name": "Start"}],'

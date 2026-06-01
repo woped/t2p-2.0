@@ -157,19 +157,13 @@ def _build_semantic_process(model):
 
     for task in model["tasks"]:
         # Convert task type to camelCase (e.g., UserTask -> userTask).
-        task_type = (
-            task["type"][0].lower() + task["type"][1:] if task["type"] else task["type"]
-        )
+        task_type = task["type"][0].lower() + task["type"][1:]
         ET.SubElement(
             process, f"{{{_NS['bpmn']}}}{task_type}", id=task["id"], name=task["name"]
         )
 
     for gateway in model["gateways"]:
-        gateway_type = (
-            gateway["type"][0].lower() + gateway["type"][1:]
-            if gateway["type"]
-            else gateway["type"]
-        )
+        gateway_type = gateway["type"][0].lower() + gateway["type"][1:]
         ET.SubElement(
             process,
             f"{{{_NS['bpmn']}}}{gateway_type}",
