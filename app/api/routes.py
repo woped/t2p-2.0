@@ -48,15 +48,6 @@ def _error_response(status_code, code, message):
     return jsonify({"error": {"code": code, "message": message}}), status_code
 
 
-def _extract_bearer():
-    """Return the Authorization header if it is a well-formed bearer token, else None."""
-    auth = request.headers.get("Authorization", "")
-    parts = auth.split()
-    if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1]:
-        return auth
-    return None
-
-
 def _removed_api_call_response():
     """Respond for the legacy endpoint whose previously announced sunset elapsed."""
     REQUEST_COUNT.labels(
@@ -212,7 +203,15 @@ def generatePNML():
 
 
 def _v2_generate(target):
-    """Receive a v2 generate request, validate it, and produce the requested model.
+    """Forward a v2 generate request to the connector and produce the requested model.
+
+    Request validation — bearer token, JSON body, required fields, and
+    provider/model — is owned by the connector, the authoritative validator for
+    the generate contract (see ``docs/api-contract.md``). This handler does not
+    duplicate those guards: it forwards the ``Authorization`` header and body
+    fields verbatim and relays the connector's responses, including 4xx (e.g.
+    ``401 unauthorized``, ``400 invalid_request``/``invalid_provider``),
+    unchanged.
 
     The connector returns an LLM BPMN structure which this service converts to
     BPMN XML. ``target == "pnml"`` then transforms that XML to PNML.
@@ -221,32 +220,16 @@ def _v2_generate(target):
     endpoint_label = request.path
     status = "200"
     try:
-        authorization = _extract_bearer()
-        if authorization is None:
-            status = "401"
-            return _error_response(
-                401, "unauthorized", "Missing or malformed bearer token."
-            )
-
+        authorization = request.headers.get("Authorization", "")
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
-            status = "400"
-            return _error_response(400, "invalid_request", "Request body must be JSON.")
-
-        missing = [f for f in ("text", "provider", "model") if not data.get(f)]
-        if missing:
-            status = "400"
-            return _error_response(
-                400,
-                "invalid_request",
-                f"Missing or empty field(s): {', '.join(missing)}.",
-            )
+            data = {}
 
         bpmn_xml = _generate_bpmn(
             authorization=authorization,
-            text=data["text"],
-            provider=data["provider"],
-            model=data["model"],
+            text=data.get("text"),
+            provider=data.get("provider"),
+            model=data.get("model"),
         )
 
         if target == "pnml":

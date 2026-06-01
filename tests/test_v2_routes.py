@@ -69,38 +69,78 @@ def test_v2_generate_pnml_transform_error_returns_500(mock_cc, mock_mt, client):
     assert resp.get_json()["error"]["code"] == "transform_error"
 
 
+# Request validation is owned by the connector (the authoritative validator);
+# the orchestrator forwards the request and relays the connector's response. The
+# following tests assert that forward-and-relay behavior rather than a duplicate
+# guard in this layer.
+
+
 @patch("app.api.routes.ConnectorClient")
-def test_v2_generate_missing_auth_returns_401(mock_cc, client):
+def test_v2_generate_forwards_missing_auth_and_relays_401(mock_cc, client):
+    # No Authorization header: the orchestrator forwards an empty header and
+    # relays the connector's 401 instead of short-circuiting locally.
+    mock_cc.return_value.generate.side_effect = ConnectorClientError(
+        401,
+        {
+            "error": {
+                "code": "unauthorized",
+                "message": "Missing or malformed Authorization header.",
+            }
+        },
+    )
+
     resp = client.post("/v2/generate/bpmn", json=BODY)
 
     assert resp.status_code == 401
     assert resp.get_json()["error"]["code"] == "unauthorized"
-    mock_cc.return_value.generate.assert_not_called()
-
-
-@patch("app.api.routes.ConnectorClient")
-def test_v2_generate_malformed_auth_returns_401(mock_cc, client):
-    resp = client.post(
-        "/v2/generate/bpmn", json=BODY, headers={"Authorization": "secret-token"}
+    mock_cc.return_value.generate.assert_called_once_with(
+        authorization="",
+        user_text="describe a process",
+        provider="openai",
+        model="gpt-4o",
     )
 
-    assert resp.status_code == 401
-    assert resp.get_json()["error"]["code"] == "unauthorized"
-
 
 @patch("app.api.routes.ConnectorClient")
-def test_v2_generate_missing_field_returns_400(mock_cc, client):
+def test_v2_generate_forwards_missing_field_and_relays_400(mock_cc, client):
+    # A missing field is forwarded (as None) and the connector's 400 is relayed.
+    mock_cc.return_value.generate.side_effect = ConnectorClientError(
+        400,
+        {
+            "error": {
+                "code": "invalid_request",
+                "message": "Missing or empty field(s): model.",
+            }
+        },
+    )
     body = {"text": "x", "provider": "openai"}  # no model
 
     resp = client.post("/v2/generate/bpmn", json=body, headers=AUTH)
 
     assert resp.status_code == 400
     assert resp.get_json()["error"]["code"] == "invalid_request"
-    mock_cc.return_value.generate.assert_not_called()
+    mock_cc.return_value.generate.assert_called_once_with(
+        authorization="Bearer secret-token",
+        user_text="x",
+        provider="openai",
+        model=None,
+    )
 
 
 @patch("app.api.routes.ConnectorClient")
-def test_v2_generate_non_json_returns_400(mock_cc, client):
+def test_v2_generate_non_json_is_forwarded_as_empty(mock_cc, client):
+    # A non-JSON body is normalized to empty fields and forwarded; the connector
+    # rejects it and the orchestrator relays that error.
+    mock_cc.return_value.generate.side_effect = ConnectorClientError(
+        400,
+        {
+            "error": {
+                "code": "invalid_request",
+                "message": "Missing or empty field(s): user_text, provider, model.",
+            }
+        },
+    )
+
     resp = client.post(
         "/v2/generate/bpmn",
         data="not json",
@@ -109,6 +149,12 @@ def test_v2_generate_non_json_returns_400(mock_cc, client):
 
     assert resp.status_code == 400
     assert resp.get_json()["error"]["code"] == "invalid_request"
+    mock_cc.return_value.generate.assert_called_once_with(
+        authorization="Bearer secret-token",
+        user_text=None,
+        provider=None,
+        model=None,
+    )
 
 
 @patch("app.api.routes.ConnectorClient")

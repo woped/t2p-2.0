@@ -80,7 +80,20 @@ Response 200: { "raw_response": string }
 ```
 
 The client's `Authorization` header is forwarded unchanged; the request `text` is sent as
-`user_text`. Provider and model validation is owned by the connector.
+`user_text`.
+
+### Authoritative validation
+
+The connector is the **authoritative validator** for the generate contract and is
+**internal — called solely by t2p-2.0**. It owns all request validation: the bearer
+token (and raw-key extraction from it), JSON-body shape, required-field presence, and
+provider/model validation against its registry.
+
+t2p-2.0 therefore does **not** duplicate those guards on `/v2/generate/*`: it forwards
+the `Authorization` header and the body fields (`text`→`user_text`, `provider`, `model`)
+verbatim and relays the connector's responses — including 4xx (`401 unauthorized`,
+`400 invalid_request`/`invalid_provider`) — to the client unchanged. A connector 5xx or an
+unreachable connector surfaces as `500 upstream_error`.
 
 ### Internal model representation
 
