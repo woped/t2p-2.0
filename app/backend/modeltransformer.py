@@ -2,7 +2,6 @@ import json
 import logging
 import time
 import requests
-from json2xml import json2xml
 from flask import current_app
 
 # Configure a logger for this module
