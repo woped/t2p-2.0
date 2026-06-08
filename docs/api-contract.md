@@ -111,5 +111,6 @@ invalid surfaces as `500 invalid_model` — then converts it.
 `POST /v2/generate/bpmn` converts the JSON to BPMN XML and returns that BPMN.
 `POST /v2/generate/pnml` first converts the JSON to BPMN XML, then sends the XML
 to the model-transformer service (`POST <transformer>/transform`,
-`direction=bpmntopnml`) and returns the resulting PNML; a transformer failure
+`direction=bpmntopnml`) and assigns layout coordinates to the places and
+transitions of the returned PNML before responding; a transformer failure
 surfaces as `500 transform_error`.

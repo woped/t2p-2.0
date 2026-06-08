@@ -1,3 +1,24 @@
+2026-06-08
+- Introduced the versioned /v2 API: /v2/generate/bpmn, /v2/generate/pnml,
+  /v2/models, and /v2/health.
+- Moved the provider key out of the JSON body to bearer auth
+  (Authorization: Bearer <api_key>) on /v2/generate/*.
+- Made the connector the authoritative validator for the generate contract;
+  T2P forwards the request verbatim and relays the connector's responses
+  (including 4xx) instead of duplicating validation.
+- Added the ConnectorClient transport seam for the LLM API connector and
+  replaced the old direct-provider pipeline.
+- Defined the connector boundary as a structured JSON process model; T2P now
+  verifies the model's referential integrity and converts it to BPMN XML,
+  returning invalid_model on a structurally broken reply.
+- Added a layered layout for the generated BPMN and assigned layout
+  coordinates to the PNML produced by /v2/generate/pnml.
+- Standardized v2 error responses to { "error": { "code", "message" } }.
+- Deprecated the unversioned generation endpoints (functional until
+  2026-12-01) with Deprecation/Sunset/Link headers; /api_call now returns
+  410 Gone after its 2025-12-31 sunset.
+- Bumped the service to 2.1.0 and aligned the OpenAPI spec version.
+
 2026-02-09
 - Added root-level version.py for service metadata and container tagging.
 - Updated CD workflow to use the Python Docker build workflow.
