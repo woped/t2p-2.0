@@ -2,7 +2,7 @@
 Version and metadata information for the T2P service.
 """
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 __service_name__ = "T2P - Text to Process"
 __description__ = "Service for converting text to BPMN process models"
 __author__ = "WoPeD Team"
@@ -13,7 +13,7 @@ __build_date__ = None
 __git_commit__ = None
 
 # API version
-__api_version__ = "v1"
+__api_version__ = "v2"
 
 
 def get_version_info():

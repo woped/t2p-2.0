@@ -6,12 +6,15 @@ This repository contains a Flask-based web API for converting and transforming p
 
 ## Features
 
-- "/test_connection" Route - Connection test/health endpoint
-- "/generate_bpmn" and "/generate_BPMN" Routes - Generate BPMN output
-- "/generate_pnml" and "/generate_PNML" Routes - Generate PNML output
+- "/v2/health" Route - Current connection test/health endpoint
+- "/v2/generate/bpmn" and "/v2/generate/pnml" Routes - Current versioned generation API
+- "/v2/models" Route - Lists the available provider/model pairs (proxied from the connector)
+- "/test_connection", "/generate_bpmn", "/generate_BPMN", "/generate_pnml" and "/generate_PNML" Routes - Functional deprecated compatibility endpoints until 2026-12-01
+- "/_/_/echo" Route - Operational liveness endpoint
 - "/metrics" Route - Prometheus metrics endpoint
+- "/swagger" Route - Interactive Swagger UI rendered from the OpenAPI spec
 - "/api/swagger.yaml" Route - Swagger/OpenAPI specification
-- "/api_call" Route - Deprecated endpoint for backward compatibility
+- "/api_call" Route - Removed endpoint after its 2025-12-31 sunset date
 
 ## Installation
 
@@ -20,8 +23,6 @@ https://learn.microsoft.com/en-us/windows/wsl/install - The recommended Distro i
 
 Install Docker as instructed here:
 https://docs.docker.com/desktop/wsl/
-
-### Prerequisites
 
 ### Setting Up Your Local Environment
 
@@ -46,8 +47,10 @@ To set up the local environment without docker, use these commands:
   ```
 - Run the Flask app locally:
   ```bash
-  flask --app t2p run
+  flask --app flasky run
   ```
+  (`.flaskenv` already sets `FLASK_APP=flasky.py`, so a bare `flask run` works
+  too.)
 
 #### Running the Project as docker image
 
@@ -74,7 +77,7 @@ Before you start testing the endpoint, make sure the app is running. If you are 
 Open Postman and send a GET request to the following URL:
 
 ```bash
-http://localhost:4000/test_connection
+http://localhost:4000/v2/health
 ```
 
 ### Test if the endpoint is working using curl
@@ -82,7 +85,7 @@ http://localhost:4000/test_connection
 Open a terminal and send a GET request to the following URL:
 
 ```bash
-curl http://localhost:4000/test_connection
+curl http://localhost:4000/v2/health
 ```
 
 ## Versioning
@@ -93,7 +96,7 @@ The service version is stored in the root-level `version.py` file under the `__v
 
 First install the requirements, see section "Setting Up Your Local Environment" for more information.
 
-### In the app folder, run the following commands:
+### From the project root, run the following commands:
 
 To run all the tests, use the following command:
 

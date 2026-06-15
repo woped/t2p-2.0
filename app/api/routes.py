@@ -1,150 +1,336 @@
-from flask import jsonify, send_from_directory, current_app, request, make_response
-import time, logging, os
+import logging
+import os
+import time
+from functools import wraps
+
+import requests
+from flask import jsonify, make_response, request, send_from_directory
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
 from app.api import api_bp
 from app.__init__ import REQUEST_COUNT, REQUEST_LATENCY
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
-from app.backend.handlecall import HandleCall
+from app.backend.bpmn_builder import InvalidModelError, raw_response_to_bpmn
+from app.backend.connector_client import (
+    ConnectorClient,
+    ConnectorClientError,
+    ConnectorError,
+)
+from app.backend.modeltransformer import ModelTransformer
+from app.backend.xml_parser import assign_pnml_coordinates
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
 
-@api_bp.route('/example')
+_DEPRECATION_LINK = '</api/swagger.yaml>; rel="deprecation"'
+_LEGACY_DEPRECATION_DATE = "@1780272000"  # 2026-06-01T00:00:00Z
+_LEGACY_SUNSET_DATE = "Tue, 01 Dec 2026 00:00:00 GMT"
+_REMOVED_API_CALL_SUNSET_DATE = "Wed, 31 Dec 2025 23:59:59 GMT"
+_LEGACY_PROVIDER = "openai"
+_LEGACY_MODEL = "gpt-4o"
+
+
+def deprecated(view):
+    """Attach migration headers while a legacy endpoint remains functional."""
+
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        response = make_response(view(*args, **kwargs))
+        response.headers.setdefault("Deprecation", _LEGACY_DEPRECATION_DATE)
+        response.headers.setdefault("Sunset", _LEGACY_SUNSET_DATE)
+        response.headers.setdefault("Link", _DEPRECATION_LINK)
+        return response
+
+    return wrapper
+
+
+def _error_response(status_code, code, message):
+    """Build the standard v2 error body: {"error": {"code", "message"}}."""
+    return jsonify({"error": {"code": code, "message": message}}), status_code
+
+
+def _removed_api_call_response():
+    """Respond for the legacy endpoint whose previously announced sunset elapsed."""
+    REQUEST_COUNT.labels(
+        method=request.method, endpoint=request.path, status="410"
+    ).inc()
+    response = make_response(
+        _error_response(
+            410,
+            "deprecated",
+            "This endpoint was removed after its sunset date; use the /v2 API.",
+        )
+    )
+    response.headers["Sunset"] = _REMOVED_API_CALL_SUNSET_DATE
+    response.headers["Link"] = _DEPRECATION_LINK
+    return response
+
+
+def _generate_bpmn(authorization, text, provider, model):
+    raw_response = ConnectorClient().generate(
+        authorization=authorization,
+        user_text=text,
+        provider=provider,
+        model=model,
+    )
+    return raw_response_to_bpmn(raw_response)
+
+
+def _transform_to_pnml(bpmn_xml):
+    # The incoming BPMN already carries a layout, but the transformer discards
+    # it and we recompute coordinates on the PNML below. That double layout is
+    # intentional: both paths reuse the same BPMN builder, and the cost is
+    # negligible next to the LLM call and transformer round-trip. Avoiding it
+    # would mean emitting layout-free BPMN, which the transformer may reject.
+    pnml_xml = ModelTransformer().transform(bpmn_xml, {"direction": "bpmntopnml"})
+    return assign_pnml_coordinates(pnml_xml)
+
+
+def _legacy_generate(target):
+    """Preserve the unversioned generation contract during its migration period."""
+    start_time = time.time()
+    endpoint_label = request.path
+    status = "200"
+    try:
+        data = request.get_json(silent=True)
+        if not data:
+            status = "400"
+            return jsonify({"error": "Request body must be JSON."}), 400
+
+        missing = [field for field in ("text", "api_key") if field not in data]
+        if missing:
+            status = "400"
+            return jsonify({"error": f"Missing data for: {', '.join(missing)}"}), 400
+
+        bpmn_xml = _generate_bpmn(
+            authorization=f"Bearer {data['api_key']}",
+            text=data["text"],
+            provider=_LEGACY_PROVIDER,
+            model=_LEGACY_MODEL,
+        )
+        result = _transform_to_pnml(bpmn_xml) if target == "pnml" else bpmn_xml
+        return jsonify({"result": result}), 200
+    except requests.exceptions.RequestException as exc:
+        status = "500"
+        logger.error("Legacy transformation failed", extra={"error": str(exc)})
+        return jsonify({"error": "BPMN to PNML transformation failed."}), 500
+    except ConnectorError as exc:
+        status = "500"
+        logger.error("Legacy connector call failed", extra={"error": str(exc)})
+        return jsonify({"error": "LLM API connector error."}), 500
+    except (ConnectorClientError, ValueError) as exc:
+        status = "500"
+        logger.error("Legacy generation failed", extra={"error": str(exc)})
+        return jsonify({"error": "Invalid response from LLM API."}), 500
+    finally:
+        duration = time.time() - start_time
+        REQUEST_COUNT.labels(
+            method="POST", endpoint=endpoint_label, status=status
+        ).inc()
+        REQUEST_LATENCY.labels(method="POST", endpoint=endpoint_label).observe(duration)
+
+
+@api_bp.route("/example")
 def example_route():
     logger.debug("Example route accessed")
     return "This is an example route"
 
-@api_bp.route('/api/swagger.yaml')
+
+@api_bp.route("/api/swagger.yaml")
 def serve_swagger_yaml():
     logger.debug("Swagger YAML requested")
-    return send_from_directory(os.path.dirname(__file__), 'swagger.yaml')
+    return send_from_directory(os.path.dirname(__file__), "swagger.yaml")
 
-@api_bp.route('/metrics')
+
+@api_bp.route("/metrics")
 def metrics():
     # Don't log metrics endpoint to avoid noise in logs
-    return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
+    return generate_latest(), 200, {"Content-Type": CONTENT_TYPE_LATEST}
 
-@api_bp.route('/test_connection', methods=['GET'])
+
+@api_bp.route("/test_connection", methods=["GET"])
+@deprecated
 def test():
     start_time = time.time()
     try:
-        logger.info("Test connection endpoint called", extra={"client_ip": request.remote_addr})
-        REQUEST_COUNT.labels(method='GET', endpoint='/test_connection', status='200').inc()
+        REQUEST_COUNT.labels(
+            method="GET", endpoint="/test_connection", status="200"
+        ).inc()
         return jsonify("Successful"), 200
-    except Exception as e:
-        logger.error("Test connection failed", extra={"error": str(e)}, exc_info=True)
-        REQUEST_COUNT.labels(method='GET', endpoint='/test_connection', status='500').inc()
-        return jsonify({"error": str(e)}), 500
     finally:
-        duration = time.time() - start_time
-        REQUEST_LATENCY.labels(method='GET', endpoint='/test_connection').observe(duration)
-        logger.debug("Test connection completed", extra={"duration_seconds": round(duration, 4)})
+        REQUEST_LATENCY.labels(method="GET", endpoint="/test_connection").observe(
+            time.time() - start_time
+        )
+
 
 @api_bp.route("/api_call", methods=["POST"])
 def api_call():
-    start_time = time.time()
-    try:
-        logger.warning(
-            "/api_call (DEPRECATED) endpoint called",
-            extra={
-                "client_ip": request.remote_addr,
-                "content_type": request.headers.get("Content-Type"),
-                "user_agent": request.headers.get("User-Agent")
-            }
-        )
-        # Mark as deprecated via response headers per IETF recommendations
-        result = HandleCall.handle(current_app, {"direction": "pnmltobpmn"})
+    return _removed_api_call_response()
 
-        response = make_response(result)
-        # Deprecation signaling headers
-        response.headers.setdefault('Deprecation', 'true')  # boolean-style flag
-        # Optional: set a sunset date (RFC 8594) when the endpoint will be removed
-        response.headers.setdefault('Sunset', 'Wed, 31 Dec 2025 23:59:59 GMT')
-        # Optional: link to deprecation/migration docs
-        response.headers.setdefault('Link', '<https://woped.dhbw-karlsruhe.de/docs/migration>; rel="deprecation"')
-
-        status_code = getattr(response, 'status_code', 200)
-        REQUEST_COUNT.labels(method='POST', endpoint='/api_call', status=str(status_code)).inc()
-        logger.info("API call completed", extra={"status": status_code, "deprecated": True})
-        return response
-    except Exception as e:
-        logger.error("API call failed", extra={"error": str(e)}, exc_info=True)
-        REQUEST_COUNT.labels(method='POST', endpoint='/api_call', status='500').inc()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        duration = time.time() - start_time
-        REQUEST_LATENCY.labels(method='POST', endpoint='/api_call').observe(duration)
-        logger.debug("API call duration", extra={"duration_seconds": round(duration, 4)})
 
 @api_bp.route("/generate_bpmn", methods=["POST"])  # preferred lowercase alias
-@api_bp.route("/generate_BPMN", methods=["POST"])  # legacy/case-variant for compatibility
+@api_bp.route(
+    "/generate_BPMN", methods=["POST"]
+)  # legacy/case-variant for compatibility
+@deprecated
 def generateBPMN():
-    start_time = time.time()
-    endpoint_label = request.path
-    try:
-        logger.info(
-            "Generate BPMN endpoint called",
-            extra={
-                "endpoint": endpoint_label,
-                "client_ip": request.remote_addr,
-                "content_type": request.headers.get("Content-Type")
-            }
-        )
-        RESPONSE_STATUS = '200'
-        result = HandleCall.handle(current_app, {"direction": "pnmltobpmn"})
-        # If HandleCall returns a tuple (response, status), reflect status in metrics
-        if isinstance(result, tuple) and len(result) > 1:
-            RESPONSE_STATUS = str(result[1])
-        REQUEST_COUNT.labels(method='POST', endpoint=endpoint_label, status=RESPONSE_STATUS).inc()
-        logger.info("Generate BPMN completed", extra={"status": RESPONSE_STATUS})
-        return result
-    except Exception as e:
-        logger.error("Generate BPMN failed", extra={"error": str(e), "endpoint": endpoint_label}, exc_info=True)
-        REQUEST_COUNT.labels(method='POST', endpoint=endpoint_label, status='500').inc()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        duration = time.time() - start_time
-        REQUEST_LATENCY.labels(method='POST', endpoint=endpoint_label).observe(duration)
-        logger.debug("Generate BPMN duration", extra={"duration_seconds": round(duration, 4), "endpoint": endpoint_label})
+    return _legacy_generate("bpmn")
+
 
 @api_bp.route("/generate_pnml", methods=["POST"])  # preferred lowercase alias
-@api_bp.route("/generate_PNML", methods=["POST"])  # legacy/case-variant for compatibility
+@api_bp.route(
+    "/generate_PNML", methods=["POST"]
+)  # legacy/case-variant for compatibility
+@deprecated
 def generatePNML():
+    return _legacy_generate("pnml")
+
+
+# --- v2 API ---------------------------------------------------------------
+
+
+def _v2_generate(target):
+    """Forward a v2 generate request to the connector and produce the requested model.
+
+    Request validation — bearer token, JSON body, required fields, and
+    provider/model — is owned by the connector, the authoritative validator for
+    the generate contract (see ``docs/api-contract.md``). This handler does not
+    duplicate those guards: it forwards the ``Authorization`` header and body
+    fields verbatim and relays the connector's responses, including 4xx (e.g.
+    ``401 unauthorized``, ``400 invalid_request``/``invalid_provider``),
+    unchanged.
+
+    The connector returns an LLM BPMN structure which this service converts to
+    BPMN XML. ``target == "pnml"`` then transforms that XML to PNML.
+    """
     start_time = time.time()
     endpoint_label = request.path
+    status = "200"
     try:
-        logger.info(
-            "Generate PNML endpoint called",
-            extra={
-                "endpoint": endpoint_label,
-                "client_ip": request.remote_addr,
-                "content_type": request.headers.get("Content-Type")
-            }
+        authorization = request.headers.get("Authorization", "")
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            data = {}
+
+        bpmn_xml = _generate_bpmn(
+            authorization=authorization,
+            text=data.get("text"),
+            provider=data.get("provider"),
+            model=data.get("model"),
         )
-        result = HandleCall.handle(current_app, {"direction": "bpmntopnml"})
-        RESPONSE_STATUS = '200'
-        if isinstance(result, tuple) and len(result) > 1:
-            RESPONSE_STATUS = str(result[1])
-        REQUEST_COUNT.labels(method='POST', endpoint=endpoint_label, status=RESPONSE_STATUS).inc()
-        logger.info("Generate PNML completed", extra={"status": RESPONSE_STATUS})
-        return result
-    except Exception as e:
-        logger.error("Generate PNML failed", extra={"error": str(e), "endpoint": endpoint_label}, exc_info=True)
-        REQUEST_COUNT.labels(method='POST', endpoint=endpoint_label, status='500').inc()
-        return jsonify({"error": str(e)}), 500
+
+        if target == "pnml":
+            try:
+                result = _transform_to_pnml(bpmn_xml)
+            except requests.exceptions.RequestException as e:
+                status = "500"
+                logger.error(
+                    "BPMN to PNML transformation failed",
+                    extra={"endpoint": endpoint_label, "error": str(e)},
+                )
+                return _error_response(
+                    500,
+                    "transform_error",
+                    "The BPMN to PNML transformation service failed.",
+                )
+        else:
+            result = bpmn_xml
+
+        logger.info("v2 generate completed", extra={"endpoint": endpoint_label})
+        return jsonify({"result": result}), 200
+
+    except ConnectorClientError as e:
+        # The connector rejected the request (e.g. invalid provider/model);
+        # relay its status and error body to the client unchanged.
+        status = str(e.status_code)
+        logger.info(
+            "Relaying connector client error",
+            extra={"endpoint": endpoint_label, "status": e.status_code},
+        )
+        if isinstance(e.error_body, dict) and "error" in e.error_body:
+            return jsonify(e.error_body), e.status_code
+        return _error_response(
+            e.status_code,
+            "invalid_request",
+            "The request was rejected by the LLM API connector.",
+        )
+    except ConnectorError as e:
+        status = "500"
+        logger.error(
+            "Connector call failed",
+            extra={"endpoint": endpoint_label, "error": str(e)},
+        )
+        return _error_response(
+            500, "upstream_error", "The LLM API connector is unavailable."
+        )
+    except InvalidModelError as e:
+        status = "500"
+        logger.warning(
+            "Connector returned an invalid process model",
+            extra={"endpoint": endpoint_label, "error": str(e)},
+        )
+        return _error_response(
+            500,
+            "invalid_model",
+            "The LLM API connector returned a process model that could not be processed.",
+        )
+    except Exception:
+        status = "500"
+        logger.exception("Unexpected error in v2 generate")
+        return _error_response(500, "internal_error", "An unexpected error occurred.")
     finally:
         duration = time.time() - start_time
-        REQUEST_LATENCY.labels(method='POST', endpoint=endpoint_label).observe(duration)
-        logger.debug("Generate PNML duration", extra={"duration_seconds": round(duration, 4), "endpoint": endpoint_label})
+        REQUEST_COUNT.labels(
+            method="POST", endpoint=endpoint_label, status=status
+        ).inc()
+        REQUEST_LATENCY.labels(method="POST", endpoint=endpoint_label).observe(duration)
+
+
+@api_bp.route("/v2/generate/bpmn", methods=["POST"])
+def v2_generate_bpmn():
+    return _v2_generate("bpmn")
+
+
+@api_bp.route("/v2/generate/pnml", methods=["POST"])
+def v2_generate_pnml():
+    return _v2_generate("pnml")
+
+
+@api_bp.route("/v2/models", methods=["GET"])
+def v2_models():
+    start_time = time.time()
+    status = "200"
+    try:
+        models = ConnectorClient().list_models()
+        return jsonify({"models": models}), 200
+    except ConnectorError as e:
+        status = "500"
+        logger.error("Failed to fetch models from connector", extra={"error": str(e)})
+        return _error_response(
+            500, "upstream_error", "The LLM API connector could not be reached."
+        )
+    except Exception:
+        status = "500"
+        logger.exception("Unexpected error in v2 models")
+        return _error_response(500, "internal_error", "An unexpected error occurred.")
+    finally:
+        duration = time.time() - start_time
+        REQUEST_COUNT.labels(method="GET", endpoint="/v2/models", status=status).inc()
+        REQUEST_LATENCY.labels(method="GET", endpoint="/v2/models").observe(duration)
+
+
+@api_bp.route("/v2/health", methods=["GET"])
+def v2_health():
+    REQUEST_COUNT.labels(method="GET", endpoint="/v2/health", status="200").inc()
+    return jsonify({"status": "ok"}), 200
+
 
 @api_bp.route("/_/_/echo")
 def echo():
     start_time = time.time()
     try:
-        logger.debug("Echo endpoint called", extra={"client_ip": request.remote_addr})
-        REQUEST_COUNT.labels(method='GET', endpoint='/_/_/echo', status='200').inc()
-        return jsonify(success=True)
+        REQUEST_COUNT.labels(method="GET", endpoint="/_/_/echo", status="200").inc()
+        return jsonify(success=True), 200
     finally:
-        duration = time.time() - start_time
-        REQUEST_LATENCY.labels(method='GET', endpoint='/_/_/echo').observe(duration)
-        logger.debug("Echo completed", extra={"duration_seconds": round(duration, 4)})
-
+        REQUEST_LATENCY.labels(method="GET", endpoint="/_/_/echo").observe(
+            time.time() - start_time
+        )
