@@ -241,9 +241,11 @@ def _build_semantic_process(model):
         attrib={"id": "Process_1", "isExecutable": "false"},
     )
 
+    semantic_elements = {}
+
     for event in model["events"]:
         event_type = _EVENT_TYPE_MAP.get(event["type"], "intermediateCatchEvent")
-        ET.SubElement(
+        semantic_elements[event["id"]] = ET.SubElement(
             process,
             f"{{{_NS['bpmn']}}}{event_type}",
             id=event["id"],
@@ -253,13 +255,13 @@ def _build_semantic_process(model):
     for task in model["tasks"]:
         # Convert task type to camelCase (e.g., UserTask -> userTask).
         task_type = task["type"][0].lower() + task["type"][1:]
-        ET.SubElement(
+        semantic_elements[task["id"]] = ET.SubElement(
             process, f"{{{_NS['bpmn']}}}{task_type}", id=task["id"], name=task["name"]
         )
 
     for gateway in model["gateways"]:
         gateway_type = gateway["type"][0].lower() + gateway["type"][1:]
-        ET.SubElement(
+        semantic_elements[gateway["id"]] = ET.SubElement(
             process,
             f"{{{_NS['bpmn']}}}{gateway_type}",
             id=gateway["id"],
@@ -267,6 +269,10 @@ def _build_semantic_process(model):
         )
 
     for flow in model["flows"]:
+        source = semantic_elements[flow["source"]]
+        target = semantic_elements[flow["target"]]
+        ET.SubElement(source, f"{{{_NS['bpmn']}}}outgoing").text = flow["id"]
+        ET.SubElement(target, f"{{{_NS['bpmn']}}}incoming").text = flow["id"]
         ET.SubElement(
             process,
             f"{{{_NS['bpmn']}}}sequenceFlow",

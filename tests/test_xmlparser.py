@@ -59,6 +59,8 @@ def test_json_to_bpmn_generates_xml(example_data):
     assert "startEvent1" in result
     assert "task1" in result
     assert "endEvent1" in result
+    assert "<outgoing>flow1</outgoing>" in result
+    assert "<incoming>flow1</incoming>" in result
 
 
 def test_json_to_bpmn_accepts_connector_event_type_names(example_data):
