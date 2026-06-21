@@ -65,22 +65,19 @@ def _removed_api_call_response():
     return response
 
 
-def _generate_bpmn(authorization, text, provider, model):
+def _generate_bpmn(authorization, text, provider, model, include_layout=True):
     raw_response = ConnectorClient().generate(
         authorization=authorization,
         user_text=text,
         provider=provider,
         model=model,
     )
-    return raw_response_to_bpmn(raw_response)
+    return raw_response_to_bpmn(raw_response, include_layout=include_layout)
 
 
 def _transform_to_pnml(bpmn_xml):
-    # The incoming BPMN already carries a layout, but the transformer discards
-    # it and we recompute coordinates on the PNML below. That double layout is
-    # intentional: both paths reuse the same BPMN builder, and the cost is
-    # negligible next to the LLM call and transformer round-trip. Avoiding it
-    # would mean emitting layout-free BPMN, which the transformer may reject.
+    # The transformer ignores BPMN layout, so the PNML path builds layout-free
+    # BPMN (see _generate_bpmn callers). We lay out the PNML once, here.
     pnml_xml = ModelTransformer().transform(bpmn_xml, {"direction": "bpmntopnml"})
     return assign_pnml_coordinates(pnml_xml)
 
@@ -106,6 +103,7 @@ def _legacy_generate(target):
             text=data["text"],
             provider=_LEGACY_PROVIDER,
             model=_LEGACY_MODEL,
+            include_layout=target != "pnml",
         )
         result = _transform_to_pnml(bpmn_xml) if target == "pnml" else bpmn_xml
         return jsonify({"result": result}), 200
@@ -216,6 +214,7 @@ def _v2_generate(target):
             text=data.get("text"),
             provider=data.get("provider"),
             model=data.get("model"),
+            include_layout=target != "pnml",
         )
 
         if target == "pnml":

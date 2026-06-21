@@ -352,18 +352,21 @@ def _add_diagram(definitions, model):
             )
 
 
-def json_to_bpmn(model):
+def json_to_bpmn(model, include_layout=True):
     """Convert a validated logical process model into BPMN 2.0 XML.
 
-    Builds the semantic process, lays it out and draws the diagram, then
-    returns the serialized XML string.
+    Builds the semantic process and serializes it. When ``include_layout`` is
+    true it also draws the diagram (shapes and waypoints). The PNML path passes
+    ``include_layout=False``: the transformer ignores BPMN layout and we lay the
+    PNML out separately, so computing a BPMN layout there would be wasted work.
     """
     logger.info(
         "Converting model to BPMN",
         extra={k: len(model[k]) for k in ("events", "tasks", "gateways", "flows")},
     )
     definitions = _build_semantic_process(model)
-    _add_diagram(definitions, model)
+    if include_layout:
+        _add_diagram(definitions, model)
 
     tree = ET.ElementTree(definitions)
     ET.indent(tree, space="  ", level=0)

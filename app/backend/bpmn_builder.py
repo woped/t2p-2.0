@@ -146,7 +146,10 @@ def _is_implicit_xor_split(node, target_nodes):
         return False
     if _contains_term(node.get("name"), _CONDITIONAL_TERMS):
         return True
-    return any(_contains_term(target.get("name"), _CONDITIONAL_TERMS) for target in target_nodes)
+    return any(
+        _contains_term(target.get("name"), _CONDITIONAL_TERMS)
+        for target in target_nodes
+    )
 
 
 def _normalize_implicit_gateways(model):
@@ -275,9 +278,7 @@ def _merge_duplicate_tasks(model):
 
 def _redirect_backorder_delivery_flows(model):
     """Backorder branches must not imply successful product delivery."""
-    end_ids = [
-        event["id"] for event in model["events"] if "end" in _event_type(event)
-    ]
+    end_ids = [event["id"] for event in model["events"] if "end" in _event_type(event)]
     if len(end_ids) != 1:
         return model
 
@@ -357,12 +358,13 @@ def _prune_unreachable_delivery_success_tasks(model):
     }
 
 
-def raw_response_to_bpmn(raw_response):
+def raw_response_to_bpmn(raw_response, include_layout=True):
     """Turn the connector's reply into BPMN XML: decode -> verify -> build.
 
     Raises ``InvalidModelError`` if the reply is not JSON, or if a flow
     references a node that does not exist; the route maps that to an
-    ``invalid_model`` response.
+    ``invalid_model`` response. ``include_layout=False`` skips diagram layout
+    for the PNML path, which lays out the PNML separately.
     """
     model = _decode(raw_response)
     _verify(model, verify_graph=False)
@@ -372,4 +374,4 @@ def raw_response_to_bpmn(raw_response):
     _verify(model, verify_graph=False)
     model = _normalize_implicit_gateways(model)
     _verify(model)
-    return json_to_bpmn(model)
+    return json_to_bpmn(model, include_layout=include_layout)
