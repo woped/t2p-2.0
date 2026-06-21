@@ -271,6 +271,11 @@ def _build_semantic_process(model):
     for flow in model["flows"]:
         source = semantic_elements[flow["source"]]
         target = semantic_elements[flow["target"]]
+        # These per-node <incoming>/<outgoing> tags look redundant with the
+        # sequenceFlow's source/target below, but the model-transformer needs
+        # them: its get_in_degree/get_out_degree read the node tags, not the
+        # edges. Without them it does not error -- it silently builds a wrong
+        # net (gateways look degree-0 and get pruned). Do not remove.
         ET.SubElement(source, f"{{{_NS['bpmn']}}}outgoing").text = flow["id"]
         ET.SubElement(target, f"{{{_NS['bpmn']}}}incoming").text = flow["id"]
         ET.SubElement(
