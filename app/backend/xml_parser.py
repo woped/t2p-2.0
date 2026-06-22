@@ -1,6 +1,6 @@
 import xml.etree.ElementTree as ET
 import logging
-from collections import deque
+from collections import deque, defaultdict
 
 logger = logging.getLogger(__name__)
 
@@ -39,15 +39,27 @@ ET.register_namespace("dc", _NS["dc"])
 ET.register_namespace("xsi", _NS["xsi"])
 
 
-def _layered_layout(
+def _sugiyama_layout(
     elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_offset=50
 ):
-    """Assign top-left (x, y) positions using a left-to-right layered layout.
+    """Compute a layered (Sugiyama-style) layout plus orthogonal edge routing.
 
-    Layers are determined by a longest-path computation over the DAG formed by
-    *flows*.  Each layer becomes a vertical column of nodes ordered by element
-    ID for deterministic output.  Nodes that are part of cycles or are
-    disconnected are appended after the main layout.
+    The layout runs in the classic stages, each of which exists to keep edges
+    from crossing nodes or stacking on top of one another:
+
+    1.  **Layering** – a longest-path assignment over the DAG of *flows* puts
+        every node in a column (layer). Cyclic or disconnected nodes are
+        appended to trailing layers so they are still placed.
+    2.  **Dummy nodes** – every forward edge that spans more than one layer is
+        split into unit-length hops by inserting a routing-only *dummy* node in
+        each layer it passes over. The dummy claims its own slot in that layer,
+        which reserves a clear lane for the edge so it never runs across the
+        nodes it skips.
+    3.  **Ordering** – a few barycenter sweeps reorder nodes within each layer to
+        reduce edge crossings.
+    4.  **Coordinates** – columns are placed left to right; each column is
+        stacked top to bottom and centred on a common midline so the layers stay
+        vertically aligned.
 
     Args:
         elements_by_id: ``{id: {"w": int, "h": int}}`` – node sizes in pixels.
@@ -58,24 +70,37 @@ def _layered_layout(
         y_offset: top margin (pixels).
 
     Returns:
-        ``{id: {"x": int, "y": int, "w": int, "h": int}}`` – top-left corners.
+        ``(positions, ctx)`` where *positions* is
+        ``{real_id: {"x", "y", "w", "h"}}`` (top-left corners, dummy nodes
+        excluded) and *ctx* carries the routing metadata
+        (``centers``, per-flow ``chains``, ``col_x``/``col_w`` column geometry,
+        ``node_layer`` and the ``is_dummy`` set) that :func:`_add_diagram` turns
+        into waypoints.
     """
-    node_ids = list(elements_by_id.keys())
-    if not node_ids:
-        return {}
+    empty_ctx = {
+        "centers": {},
+        "chains": [],
+        "col_x": {},
+        "col_w": {},
+        "node_layer": {},
+        "is_dummy": set(),
+    }
+    real_ids = list(elements_by_id.keys())
+    if not real_ids:
+        return {}, empty_ctx
 
-    # Build adjacency lists.
-    successors: dict[str, list[str]] = {nid: [] for nid in node_ids}
-    predecessors: dict[str, list[str]] = {nid: [] for nid in node_ids}
+    # Build adjacency lists over the real nodes only.
+    successors: dict[str, list[str]] = {nid: [] for nid in real_ids}
+    predecessors: dict[str, list[str]] = {nid: [] for nid in real_ids}
     for flow in flows:
         src, tgt = flow.get("source", ""), flow.get("target", "")
         if src in successors and tgt in predecessors:
             successors[src].append(tgt)
             predecessors[tgt].append(src)
 
-    # Kahn's topological sort for a correct longest-path computation.
-    in_degree = {nid: len(predecessors[nid]) for nid in node_ids}
-    topo_queue: deque[str] = deque(nid for nid in node_ids if in_degree[nid] == 0)
+    # --- 1. Longest-path layering (Kahn topological order) ---
+    in_degree = {nid: len(predecessors[nid]) for nid in real_ids}
+    topo_queue: deque[str] = deque(nid for nid in real_ids if in_degree[nid] == 0)
     topo_order: list[str] = []
     in_degree_work = dict(in_degree)
     while topo_queue:
@@ -86,51 +111,143 @@ def _layered_layout(
             if in_degree_work[nxt] == 0:
                 topo_queue.append(nxt)
 
-    # Longest-path layer assignment for acyclic nodes.
-    node_layer: dict[str, int] = {nid: 0 for nid in node_ids}
+    node_layer: dict[str, int] = {nid: 0 for nid in real_ids}
     topo_set = set(topo_order)
     for nid in topo_order:
         for nxt in successors[nid]:
             node_layer[nxt] = max(node_layer[nxt], node_layer[nid] + 1)
 
-    # Append cyclic / disconnected nodes after the main graph.
-    if len(topo_order) < len(node_ids):
-        max_layer = max(node_layer.values(), default=0) + 1
-        for nid in node_ids:
+    # Cyclic / disconnected nodes: append each to its own trailing layer so the
+    # diagram still contains them (unchanged fallback behaviour).
+    if len(topo_order) < len(real_ids):
+        extra_layer = max(node_layer.values(), default=0) + 1
+        for nid in real_ids:
             if nid not in topo_set:
-                node_layer[nid] = max_layer
-                max_layer += 1
+                node_layer[nid] = extra_layer
+                extra_layer += 1
 
-    # Group nodes by layer, sort within each group for stable output.
-    layer_groups: dict[int, list[str]] = {}
-    for nid in node_ids:
-        layer_groups.setdefault(node_layer[nid], []).append(nid)
-    for lyr in layer_groups:
-        layer_groups[lyr].sort()
+    # --- 2. Dummy nodes for forward edges that span more than one layer ---
+    node_w = {nid: elements_by_id[nid]["w"] for nid in real_ids}
+    node_h = {nid: elements_by_id[nid]["h"] for nid in real_ids}
+    is_dummy: set[str] = set()
+    chains: list[list[str]] = []  # one node chain per flow, index-aligned
+    dummy_seq = 0
+    for flow in flows:
+        src, tgt = flow.get("source", ""), flow.get("target", "")
+        if src not in node_layer or tgt not in node_layer:
+            # Missing endpoint: keep a direct chain; the absent shape surfaces
+            # as a KeyError in _add_diagram (mapped to invalid_model upstream).
+            chains.append([src, tgt])
+            continue
+        span = node_layer[tgt] - node_layer[src]
+        if span >= 2:
+            chain = [src]
+            for layer in range(node_layer[src] + 1, node_layer[tgt]):
+                dummy = f"__dummy_{dummy_seq}"
+                dummy_seq += 1
+                node_w[dummy] = 0
+                node_h[dummy] = 0
+                node_layer[dummy] = layer
+                is_dummy.add(dummy)
+                chain.append(dummy)
+            chain.append(tgt)
+            chains.append(chain)
+        else:
+            chains.append([src, tgt])
 
-    sorted_layers = sorted(layer_groups.keys())
+    # --- 3. Ordering within layers (barycenter sweeps) ---
+    layers: dict[int, list[str]] = {}
+    for nid, lyr in node_layer.items():
+        layers.setdefault(lyr, []).append(nid)
+    # Deterministic start order: real nodes by id, dummies after.
+    for lyr in layers:
+        layers[lyr].sort(key=lambda n: (n in is_dummy, n))
 
-    # Compute the x-start (left edge) of each column.
-    layer_x: dict[int, int] = {}
+    up_adj: dict[str, list[str]] = {nid: [] for nid in node_layer}
+    down_adj: dict[str, list[str]] = {nid: [] for nid in node_layer}
+    for chain in chains:
+        for a, b in zip(chain, chain[1:]):
+            if a in node_layer and b in node_layer and node_layer[b] == node_layer[a] + 1:
+                down_adj[a].append(b)
+                up_adj[b].append(a)
+
+    max_layer = max(layers)
+    rank: dict[str, int] = {}
+    for lyr in layers:
+        for i, nid in enumerate(layers[lyr]):
+            rank[nid] = i
+
+    def _sweep(layer_indices, neighbours):
+        for lyr in layer_indices:
+            nodes = layers.get(lyr)
+            if not nodes:
+                continue
+            scored = []
+            for nid in nodes:
+                ne = neighbours[nid]
+                bary = sum(rank[x] for x in ne) / len(ne) if ne else rank[nid]
+                scored.append((bary, rank[nid], nid))
+            scored.sort()
+            layers[lyr] = [nid for _, _, nid in scored]
+            for i, nid in enumerate(layers[lyr]):
+                rank[nid] = i
+
+    for _ in range(4):
+        _sweep(range(1, max_layer + 1), up_adj)  # top-down using upper neighbours
+        _sweep(range(max_layer - 1, -1, -1), down_adj)  # bottom-up using lower
+
+    # --- 4. Coordinate assignment ---
+    sorted_layers = sorted(layers)
+    col_w = {lyr: max((node_w[n] for n in layers[lyr]), default=0) for lyr in sorted_layers}
+    col_x: dict[int, int] = {}
     x = x_offset
     for lyr in sorted_layers:
-        layer_x[lyr] = x
-        max_w = max(elements_by_id[nid]["w"] for nid in layer_groups[lyr])
-        x += max_w + h_gap
+        col_x[lyr] = x
+        x += col_w[lyr] + h_gap
 
-    # Compute final positions, centring narrower nodes within their column.
+    def _layer_height(lyr):
+        nodes = layers[lyr]
+        if not nodes:
+            return 0
+        return sum(node_h[n] for n in nodes) + (len(nodes) - 1) * v_gap
+
+    max_height = max((_layer_height(lyr) for lyr in sorted_layers), default=0)
+    center_y = y_offset + max_height / 2
+
     positions: dict[str, dict] = {}
+    centers: dict[str, tuple] = {}
     for lyr in sorted_layers:
-        nodes = layer_groups[lyr]
-        max_w_in_layer = max(elements_by_id[nid]["w"] for nid in nodes)
-        y = y_offset
-        for nid in nodes:
-            w = elements_by_id[nid]["w"]
-            h = elements_by_id[nid]["h"]
-            elem_x = layer_x[lyr] + (max_w_in_layer - w) // 2
-            positions[nid] = {"x": elem_x, "y": y, "w": w, "h": h}
+        y = center_y - _layer_height(lyr) / 2
+        for nid in layers[lyr]:
+            w, h = node_w[nid], node_h[nid]
+            elem_x = col_x[lyr] + (col_w[lyr] - w) // 2
+            centers[nid] = (elem_x + w / 2, y + h / 2)
+            if nid not in is_dummy:
+                positions[nid] = {"x": int(elem_x), "y": int(round(y)), "w": w, "h": h}
             y += h + v_gap
 
+    ctx = {
+        "centers": centers,
+        "chains": chains,
+        "col_x": col_x,
+        "col_w": col_w,
+        "node_layer": node_layer,
+        "is_dummy": is_dummy,
+    }
+    return positions, ctx
+
+
+def _layered_layout(
+    elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_offset=50
+):
+    """Return top-left ``{id: {x, y, w, h}}`` positions for *elements_by_id*.
+
+    Thin wrapper over :func:`_sugiyama_layout` for callers (the PNML path) that
+    only need node coordinates and route their own edges.
+    """
+    positions, _ = _sugiyama_layout(
+        elements_by_id, flows, h_gap, v_gap, x_offset, y_offset
+    )
     return positions
 
 
@@ -289,13 +406,40 @@ def _build_semantic_process(model):
     return definitions
 
 
+def _loop_waypoints(src, tgt, bottom_y):
+    """Route a back-edge / same-layer edge as a U beneath the whole diagram.
+
+    Such edges point against the left-to-right flow, so a straight orthogonal
+    route would cut back across the columns. Dropping below the lowest node
+    keeps them clear of every shape and forward edge.
+    """
+    sx = src["x"] + src["w"]
+    sy = src["y"] + src["h"] // 2
+    tx = tgt["x"]
+    ty = tgt["y"] + tgt["h"] // 2
+    margin = 30
+    lane_y = bottom_y + 50
+    return [
+        (sx, sy),
+        (sx + margin, sy),
+        (sx + margin, lane_y),
+        (tx - margin, lane_y),
+        (tx - margin, ty),
+        (tx, ty),
+    ]
+
+
 def _add_diagram(definitions, model):
     """Add the BPMN diagram interchange (layout + shapes + edges).
 
-    Sizes every node, computes a layered layout, then emits a BPMNShape for
-    each node and a BPMNEdge (right-centre of source to left-centre of target)
-    for each flow. ``verify`` upstream guarantees every node and flow endpoint
-    exists, so positions are looked up directly.
+    Sizes every node, computes a layered layout, then emits a BPMNShape per node
+    and a BPMNEdge per flow. Edges are routed orthogonally: vertical segments
+    ("risers") live in the gaps between columns, never inside one, and each riser
+    in a gap gets its own channel so arrows do not run on top of one another.
+    Edges that skip layers are threaded through reserved dummy lanes (see
+    :func:`_sugiyama_layout`) so they do not cross the nodes in between.
+    ``verify`` upstream guarantees every node and flow endpoint exists, so
+    positions are looked up directly.
     """
     bpmn_di = ET.SubElement(
         definitions, f"{{{_NS['bpmndi']}}}BPMNDiagram", attrib={"id": "BPMNDiagram_1"}
@@ -314,9 +458,15 @@ def _add_diagram(definitions, model):
     for gateway in model["gateways"]:
         sizes[gateway["id"]] = {"w": _BPMN_GATEWAY_W, "h": _BPMN_GATEWAY_H}
 
-    positions = _layered_layout(
-        sizes, model["flows"], h_gap=80, v_gap=50, x_offset=50, y_offset=50
+    positions, ctx = _sugiyama_layout(
+        sizes, model["flows"], h_gap=180, v_gap=90, x_offset=50, y_offset=50
     )
+    centers = ctx["centers"]
+    chains = ctx["chains"]
+    col_x = ctx["col_x"]
+    col_w = ctx["col_w"]
+    node_layer = ctx["node_layer"]
+    is_dummy = ctx["is_dummy"]
 
     for element in model["tasks"] + model["events"] + model["gateways"]:
         bpmn_shape = ET.SubElement(
@@ -336,25 +486,94 @@ def _add_diagram(definitions, model):
             },
         )
 
-    for flow in model["flows"]:
+    if not model["flows"]:
+        return
+
+    # Edge geometry helpers: a real node connects at its right/left border, a
+    # routing dummy is a single point at its centre.
+    def _exit_x(nid):
+        return centers[nid][0] if nid in is_dummy else positions[nid]["x"] + positions[nid]["w"]
+
+    def _entry_x(nid):
+        return centers[nid][0] if nid in is_dummy else positions[nid]["x"]
+
+    def _is_regular(chain):
+        """True when *chain* is a forward run of adjacent-layer hops."""
+        if not chain or len(chain) < 2:
+            return False
+        for a, b in zip(chain, chain[1:]):
+            if a not in node_layer or b not in node_layer:
+                return False
+            if node_layer[b] != node_layer[a] + 1:
+                return False
+        return True
+
+    # Pass 1: gather every hop needing a vertical riser, grouped by the gap it
+    # crosses (keyed by the hop's source layer) so each gap can hand out its own
+    # set of non-overlapping channels.
+    hops_by_flow: dict[int, list] = {}
+    risers_by_gap: dict[int, list] = defaultdict(list)
+    for idx, flow in enumerate(model["flows"]):
+        chain = chains[idx]
+        if not _is_regular(chain):
+            hops_by_flow[idx] = None
+            continue
+        hop_list = []
+        for a, b in zip(chain, chain[1:]):
+            hop = {"b": b, "layer": node_layer[a], "y1": centers[a][1], "y2": centers[b][1]}
+            hop_list.append(hop)
+            if abs(hop["y1"] - hop["y2"]) >= 1:
+                risers_by_gap[node_layer[a]].append(hop)
+        hops_by_flow[idx] = hop_list
+
+    for lyr, hop_list in risers_by_gap.items():
+        gap_lo = col_x[lyr] + col_w[lyr]
+        gap_hi = col_x[lyr + 1]
+        # Order channels by vertical span so risers tend not to cross.
+        hop_list.sort(key=lambda h: ((h["y1"] + h["y2"]) / 2, h["y1"]))
+        count = len(hop_list)
+        for i, hop in enumerate(hop_list):
+            hop["channel"] = gap_lo + (i + 1) * (gap_hi - gap_lo) / (count + 1)
+
+    bottom_y = max((p["y"] + p["h"] for p in positions.values()), default=0)
+
+    # Pass 2: emit each edge as a de-duplicated orthogonal polyline.
+    for idx, flow in enumerate(model["flows"]):
         bpmn_edge = ET.SubElement(
             bpmn_plane,
             f"{{{_NS['bpmndi']}}}BPMNEdge",
             attrib={"id": f"{flow['id']}_di", "bpmnElement": flow["id"]},
         )
-        src = positions[flow["source"]]
-        tgt = positions[flow["target"]]
-        # Connect the right-centre of the source to the left-centre of the target.
-        waypoints = [
-            {"x": str(src["x"] + src["w"]), "y": str(src["y"] + src["h"] // 2)},
-            {"x": str(tgt["x"]), "y": str(tgt["y"] + tgt["h"] // 2)},
-        ]
-        for waypoint in waypoints:
+
+        hop_list = hops_by_flow[idx]
+        if hop_list is None:
+            points = _loop_waypoints(
+                positions[flow["source"]], positions[flow["target"]], bottom_y
+            )
+        else:
+            chain = chains[idx]
+            points = [(_exit_x(chain[0]), centers[chain[0]][1])]
+            for hop in hop_list:
+                target_pt = (_entry_x(hop["b"]), hop["y2"])
+                if abs(hop["y1"] - hop["y2"]) < 1:
+                    points.append(target_pt)
+                else:
+                    channel = hop["channel"]
+                    points.append((channel, hop["y1"]))
+                    points.append((channel, hop["y2"]))
+                    points.append(target_pt)
+
+        prev = None
+        for px, py in points:
+            point = (str(int(round(px))), str(int(round(py))))
+            if point == prev:
+                continue
             ET.SubElement(
                 bpmn_edge,
                 f"{{{_NS['di']}}}waypoint",
-                attrib={"x": waypoint["x"], "y": waypoint["y"]},
+                attrib={"x": point[0], "y": point[1]},
             )
+            prev = point
 
 
 def json_to_bpmn(model, include_layout=True):
