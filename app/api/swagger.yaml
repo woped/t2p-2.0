@@ -6,7 +6,7 @@ info:
     `/v2` namespace. Existing unversioned generation endpoints remain
     functional during their deprecation period; clients should migrate to
     `/v2`. The previously deprecated `/api_call` endpoint has been removed.
-  version: 2.1.0
+  version: 2.2.0
   contact:
     name: API Support
 servers:
