@@ -119,7 +119,9 @@ def create_app(config_name=None):
 
     # Swagger UI
     SWAGGER_URL = "/swagger"
-    API_URL = "/api/swagger.yaml"
+    # Relative so the spec resolves under a reverse-proxy mount prefix
+    # (e.g. https://host/t2p-2.0/swagger/ -> /t2p-2.0/api/swagger.yaml).
+    API_URL = "../api/swagger.yaml"
     swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
     app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 

@@ -10,6 +10,8 @@ info:
   contact:
     name: API Support
 servers:
+  - url: https://woped.dhbw-karlsruhe.de/t2p-2.0
+    description: Production (behind the Apache reverse proxy)
   - url: http://localhost:5000
     description: Local development server
 
