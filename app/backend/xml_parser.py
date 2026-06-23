@@ -98,33 +98,54 @@ def _sugiyama_layout(
             successors[src].append(tgt)
             predecessors[tgt].append(src)
 
-    # --- 1. Longest-path layering (Kahn topological order) ---
-    in_degree = {nid: len(predecessors[nid]) for nid in real_ids}
-    topo_queue: deque[str] = deque(nid for nid in real_ids if in_degree[nid] == 0)
-    topo_order: list[str] = []
-    in_degree_work = dict(in_degree)
+    # --- 1. Layering ---
+    # Break cycles first: a depth-first traversal classifies edges, and any edge
+    # pointing back to a node still on the DFS stack is a *back edge*. Removing
+    # those yields a DAG that lays out cleanly left-to-right; the back edges are
+    # drawn as loops by _add_diagram. Without this, every node on a rework loop
+    # (e.g. "reopen claim -> reassess") never reaches in-degree zero and used to
+    # be scattered into its own trailing column, wrecking the whole diagram.
+    _WHITE, _GRAY, _BLACK = 0, 1, 2
+    color = {nid: _WHITE for nid in real_ids}
+    back_edges: set[tuple[str, str]] = set()
+    for root_node in real_ids:
+        if color[root_node] != _WHITE:
+            continue
+        color[root_node] = _GRAY
+        dfs_stack = [(root_node, iter(successors[root_node]))]
+        while dfs_stack:
+            node, succ_iter = dfs_stack[-1]
+            for nxt in succ_iter:
+                if color[nxt] == _GRAY:
+                    back_edges.add((node, nxt))
+                elif color[nxt] == _WHITE:
+                    color[nxt] = _GRAY
+                    dfs_stack.append((nxt, iter(successors[nxt])))
+                    break
+            else:
+                color[node] = _BLACK
+                dfs_stack.pop()
+
+    # Longest-path layering (Kahn) over the acyclic skeleton. Relaxing each edge
+    # only after its source is dequeued keeps the longest-path layers correct.
+    acyclic_succ = {
+        nid: [t for t in successors[nid] if (nid, t) not in back_edges]
+        for nid in real_ids
+    }
+    indeg = {nid: 0 for nid in real_ids}
+    for nid in real_ids:
+        for tgt in acyclic_succ[nid]:
+            indeg[tgt] += 1
+    topo_queue: deque[str] = deque(nid for nid in real_ids if indeg[nid] == 0)
+    indeg_work = dict(indeg)
+    node_layer: dict[str, int] = {nid: 0 for nid in real_ids}
     while topo_queue:
         node = topo_queue.popleft()
-        topo_order.append(node)
-        for nxt in successors[node]:
-            in_degree_work[nxt] -= 1
-            if in_degree_work[nxt] == 0:
+        for nxt in acyclic_succ[node]:
+            node_layer[nxt] = max(node_layer[nxt], node_layer[node] + 1)
+            indeg_work[nxt] -= 1
+            if indeg_work[nxt] == 0:
                 topo_queue.append(nxt)
-
-    node_layer: dict[str, int] = {nid: 0 for nid in real_ids}
-    topo_set = set(topo_order)
-    for nid in topo_order:
-        for nxt in successors[nid]:
-            node_layer[nxt] = max(node_layer[nxt], node_layer[nid] + 1)
-
-    # Cyclic / disconnected nodes: append each to its own trailing layer so the
-    # diagram still contains them (unchanged fallback behaviour).
-    if len(topo_order) < len(real_ids):
-        extra_layer = max(node_layer.values(), default=0) + 1
-        for nid in real_ids:
-            if nid not in topo_set:
-                node_layer[nid] = extra_layer
-                extra_layer += 1
 
     # --- 2. Dummy nodes for forward edges that span more than one layer ---
     node_w = {nid: elements_by_id[nid]["w"] for nid in real_ids}
@@ -406,19 +427,19 @@ def _build_semantic_process(model):
     return definitions
 
 
-def _loop_waypoints(src, tgt, bottom_y):
-    """Route a back-edge / same-layer edge as a U beneath the whole diagram.
+def _loop_waypoints(src, tgt, lane_y):
+    """Route a back-edge / same-layer edge as a U through the *lane_y* corridor.
 
     Such edges point against the left-to-right flow, so a straight orthogonal
-    route would cut back across the columns. Dropping below the lowest node
-    keeps them clear of every shape and forward edge.
+    route would cut back across the columns. Dropping into a dedicated lane
+    beneath the diagram keeps them clear of every shape and forward edge; the
+    caller picks a distinct *lane_y* per loop so multiple loops do not overlap.
     """
     sx = src["x"] + src["w"]
     sy = src["y"] + src["h"] // 2
     tx = tgt["x"]
     ty = tgt["y"] + tgt["h"] // 2
     margin = 30
-    lane_y = bottom_y + 50
     return [
         (sx, sy),
         (sx + margin, sy),
@@ -510,7 +531,7 @@ def _add_diagram(definitions, model):
 
     # Pass 1: gather every hop needing a vertical riser, grouped by the gap it
     # crosses (keyed by the hop's source layer) so each gap can hand out its own
-    # set of non-overlapping channels.
+    # channels.
     hops_by_flow: dict[int, list] = {}
     risers_by_gap: dict[int, list] = defaultdict(list)
     for idx, flow in enumerate(model["flows"]):
@@ -520,22 +541,62 @@ def _add_diagram(definitions, model):
             continue
         hop_list = []
         for a, b in zip(chain, chain[1:]):
-            hop = {"b": b, "layer": node_layer[a], "y1": centers[a][1], "y2": centers[b][1]}
+            hop = {"a": a, "b": b, "layer": node_layer[a],
+                   "y1": centers[a][1], "y2": centers[b][1], "channel": None}
             hop_list.append(hop)
             if abs(hop["y1"] - hop["y2"]) >= 1:
                 risers_by_gap[node_layer[a]].append(hop)
         hops_by_flow[idx] = hop_list
 
-    for lyr, hop_list in risers_by_gap.items():
+    for lyr, hops in risers_by_gap.items():
         gap_lo = col_x[lyr] + col_w[lyr]
         gap_hi = col_x[lyr + 1]
-        # Order channels by vertical span so risers tend not to cross.
-        hop_list.sort(key=lambda h: ((h["y1"] + h["y2"]) / 2, h["y1"]))
-        count = len(hop_list)
-        for i, hop in enumerate(hop_list):
-            hop["channel"] = gap_lo + (i + 1) * (gap_hi - gap_lo) / (count + 1)
+        # Bundle hops that should bend together: edges sharing a target (a join)
+        # or a source (a split) collapse onto one shared channel, so they turn at
+        # the same x and meet at a single point instead of stair-stepping. Other
+        # hops each get their own channel.
+        out_count: dict[str, int] = defaultdict(int)
+        in_count: dict[str, int] = defaultdict(int)
+        for hop in hops:
+            out_count[hop["a"]] += 1
+            in_count[hop["b"]] += 1
+        bundles: dict[tuple, list] = {}
+        for hop in hops:
+            if in_count[hop["b"]] > 1:
+                key = ("in", hop["b"])
+            elif out_count[hop["a"]] > 1:
+                key = ("out", hop["a"])
+            else:
+                key = ("single", id(hop))
+            bundles.setdefault(key, []).append(hop)
+        # Lay the channels out left-to-right: splits near their source, joins near
+        # their target, singletons in between; break ties by mean height.
+        kind_rank = {"out": 0, "single": 1, "in": 2}
+
+        def _bundle_key(key):
+            ys = [(h["y1"] + h["y2"]) / 2 for h in bundles[key]]
+            return (kind_rank[key[0]], sum(ys) / len(ys))
+
+        ordered = sorted(bundles, key=_bundle_key)
+        count = len(ordered)
+        for i, key in enumerate(ordered):
+            channel = gap_lo + (i + 1) * (gap_hi - gap_lo) / (count + 1)
+            for hop in bundles[key]:
+                hop["channel"] = channel
 
     bottom_y = max((p["y"] + p["h"] for p in positions.values()), default=0)
+
+    # Give every loop/back edge its own horizontal lane beneath the diagram so
+    # they never share a corridor. Narrower loops take the shallower lanes, so
+    # wider loops nest cleanly underneath them.
+    def _loop_span(idx):
+        src, tgt = positions[model["flows"][idx]["source"]], positions[model["flows"][idx]["target"]]
+        return abs((src["x"] + src["w"]) - tgt["x"])
+
+    loop_indices = sorted(
+        (i for i, hops in hops_by_flow.items() if hops is None), key=_loop_span
+    )
+    loop_lane = {idx: bottom_y + 50 + k * 45 for k, idx in enumerate(loop_indices)}
 
     # Pass 2: emit each edge as a de-duplicated orthogonal polyline.
     for idx, flow in enumerate(model["flows"]):
@@ -548,7 +609,7 @@ def _add_diagram(definitions, model):
         hop_list = hops_by_flow[idx]
         if hop_list is None:
             points = _loop_waypoints(
-                positions[flow["source"]], positions[flow["target"]], bottom_y
+                positions[flow["source"]], positions[flow["target"]], loop_lane[idx]
             )
         else:
             chain = chains[idx]
