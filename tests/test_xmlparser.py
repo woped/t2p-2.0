@@ -354,10 +354,52 @@ def test_assign_pnml_coordinates_lays_out_each_node():
 
     # Every node is positioned, and the layered layout spreads them out
     # (not all stacked on the same placeholder coordinate).
-    assert set(coords) == {"p1", "t1", "p2"}
+    assert set(coords) == {"P1", "t1", "P2"}
     assert len(set(coords.values())) == 3
 
 
 def test_assign_pnml_coordinates_passes_through_non_xml():
     """A non-XML payload (e.g. a transformer error string) is returned as-is."""
     assert assign_pnml_coordinates("not xml") == "not xml"
+
+
+def test_assign_pnml_coordinates_renames_places_and_normalizes_transition_labels():
+    """PNML post-processing renames places to Pn and strips task-type label
+    prefixes from transitions."""
+    pnml = (
+        "<pnml><net id='n1'>"
+        "<place id='startEvent1'/>"
+        "<transition id='task1'><name><text>[UserTask] Receive Bike and Deposit</text></name></transition>"
+        "<place id='SILENTFROMtask1TOtask2'/>"
+        "<transition id='task2'><name><text>[ServiceTask] Perform Repairs</text></name></transition>"
+        "<arc id='a1' source='startEvent1' target='task1'/>"
+        "<arc id='a2' source='task1' target='SILENTFROMtask1TOtask2'/>"
+        "<arc id='a3' source='SILENTFROMtask1TOtask2' target='task2'/>"
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+
+    place_ids = [
+        node.get("id")
+        for node in root.iter()
+        if node.tag.split("}")[-1] == "place"
+    ]
+    assert place_ids == ["P1", "P2"]
+
+    transitions = {
+        node.get("id"): node.find("name/text").text
+        for node in root.iter()
+        if node.tag.split("}")[-1] == "transition"
+    }
+    assert transitions["task1"] == "receive bike and deposit"
+    assert transitions["task2"] == "perform repairs"
+
+    arcs = [
+        (arc.get("source"), arc.get("target"))
+        for arc in root.iter()
+        if arc.tag.split("}")[-1] == "arc"
+    ]
+    assert ("P1", "task1") in arcs
+    assert ("task1", "P2") in arcs
+    assert ("P2", "task2") in arcs
