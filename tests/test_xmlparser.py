@@ -405,3 +405,51 @@ def test_assign_pnml_coordinates_routes_back_edge_loops():
 def test_assign_pnml_coordinates_passes_through_non_xml():
     """A non-XML payload (e.g. a transformer error string) is returned as-is."""
     assert assign_pnml_coordinates("not xml") == "not xml"
+
+
+def test_assign_pnml_coordinates_handles_clean_transformer_output():
+    """Grounding test for the current (geometry-free) transformer output: nodes
+    carry no <graphics>, toolspecific blocks hold only semantic markers, and
+    pydantic-xml leaves a default id="" on nested elements. The post-step must
+    position every node, strip the noise id="", and preserve the semantic
+    operator/trigger/resource markers untouched."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p1'/>"
+        "<transition id='t1'>"
+        "<name id=''><text>Do work</text></name>"
+        "<toolspecific id='' tool='WoPeD' version='1.0'>"
+        "<operator id='' type='102'/>"
+        "</toolspecific>"
+        "</transition>"
+        "<transition id='t2'>"
+        "<toolspecific id='' tool='WoPeD' version='1.0'>"
+        "<trigger id='' type='200'/>"
+        "<transitionResource id='' roleName='clerk' organizationalUnitName='office'/>"
+        "</toolspecific>"
+        "</transition>"
+        "<place id='p2'/>"
+        "<arc id='a1' source='p1' target='t1'/>"
+        "<arc id='a2' source='t1' target='p2'/>"
+        "<arc id='a3' source='p2' target='t2'/>"
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+
+    # Every node is positioned.
+    for node in root.iter():
+        if node.tag.split("}")[-1] in ("place", "transition"):
+            assert node.find("graphics/position") is not None
+
+    # The noise id="" is stripped everywhere; real ids survive.
+    assert all(el.get("id") != "" for el in root.iter())
+    assert {"p1", "t1", "t2", "p2"} <= {
+        el.get("id") for el in root.iter() if el.get("id")
+    }
+
+    # Semantic workflow markers are preserved untouched.
+    operator = root.find(".//toolspecific/operator")
+    assert operator is not None and operator.get("type") == "102"
+    resource = root.find(".//toolspecific/transitionResource")
+    assert resource is not None and resource.get("roleName") == "clerk"

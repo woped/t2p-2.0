@@ -196,7 +196,11 @@ def _sugiyama_layout(
     down_adj: dict[str, list[str]] = {nid: [] for nid in node_layer}
     for chain in chains:
         for a, b in zip(chain, chain[1:]):
-            if a in node_layer and b in node_layer and node_layer[b] == node_layer[a] + 1:
+            if (
+                a in node_layer
+                and b in node_layer
+                and node_layer[b] == node_layer[a] + 1
+            ):
                 down_adj[a].append(b)
                 up_adj[b].append(a)
 
@@ -227,7 +231,9 @@ def _sugiyama_layout(
 
     # --- 4. Coordinate assignment ---
     sorted_layers = sorted(layers)
-    col_w = {lyr: max((node_w[n] for n in layers[lyr]), default=0) for lyr in sorted_layers}
+    col_w = {
+        lyr: max((node_w[n] for n in layers[lyr]), default=0) for lyr in sorted_layers
+    }
     col_x: dict[int, int] = {}
     x = x_offset
     for lyr in sorted_layers:
@@ -269,7 +275,7 @@ def _sugiyama_layout(
 
 def _set_arc_waypoints(arc_el, points, ns_prefix):
     """Write *points* as intermediate ``<graphics><position>`` bend points on an
-    ``<arc>``, replacing any the transformer left behind.
+    ``<arc>``.
 
     WoPeD reads each ``<position>`` as an absolute-canvas bend point between the
     arc's (implicit) source and target anchors, so only the interior points are
@@ -278,8 +284,6 @@ def _set_arc_waypoints(arc_el, points, ns_prefix):
     graphics = arc_el.find(f"{ns_prefix}graphics")
     if graphics is None:
         graphics = ET.SubElement(arc_el, f"{ns_prefix}graphics")
-    for stale in graphics.findall(f"{ns_prefix}position"):
-        graphics.remove(stale)
     for px, py in points:
         ET.SubElement(
             graphics,
@@ -394,26 +398,15 @@ def assign_pnml_coordinates(pnml_xml):
         position_el.set("x", str(cx))
         position_el.set("y", str(cy))
 
-        # Drop the node name's <graphics>: the transformer stamps a constant
-        # name offset (e.g. (20,20)) on every node, which the WoPeD fat client
-        # reads as the label's ABSOLUTE canvas position -> all labels collapse
-        # onto that one point. We carry no real per-label position, so removing
-        # it lets each client place the label by its own native rule (the fat
-        # client centres it just below the node). Clients that ignore the offset
-        # are unaffected. Anonymous nodes (silent/start/end places, operator
-        # helper transitions) carry no <name>, so WoPeD falls back to showing
-        # the raw id ("SILENTFROMxTOy", "startEvent1", ...) as a label -- long,
-        # ugly and overlapping. Give them an empty <name> so they render
-        # unlabelled instead.
+        # Anonymous nodes (silent/start/end places, operator helper transitions)
+        # carry no <name>, so WoPeD falls back to showing the raw id
+        # ("SILENTFROMxTOy", "startEvent1", ...) as a label -- long, ugly and
+        # overlapping. Give them an empty <name> so they render unlabelled.
         name_el = elem.find(f"{ns_prefix}name")
         if name_el is None:
             name_el = ET.Element(f"{ns_prefix}name")
             ET.SubElement(name_el, f"{ns_prefix}text").text = ""
             elem.insert(0, name_el)
-        else:
-            name_graphics = name_el.find(f"{ns_prefix}graphics")
-            if name_graphics is not None:
-                name_el.remove(name_graphics)
 
         # The transformer stamps the same (20,20) default on the WoPeD
         # <trigger>/<transitionResource> it attaches to every UserTask, and the
@@ -644,7 +637,11 @@ def _add_diagram(definitions, model):
     # Edge geometry helpers: a real node connects at its right/left border, a
     # routing dummy is a single point at its centre.
     def _exit_x(nid):
-        return centers[nid][0] if nid in is_dummy else positions[nid]["x"] + positions[nid]["w"]
+        return (
+            centers[nid][0]
+            if nid in is_dummy
+            else positions[nid]["x"] + positions[nid]["w"]
+        )
 
     def _entry_x(nid):
         return centers[nid][0] if nid in is_dummy else positions[nid]["x"]
@@ -672,8 +669,14 @@ def _add_diagram(definitions, model):
             continue
         hop_list = []
         for a, b in zip(chain, chain[1:]):
-            hop = {"a": a, "b": b, "layer": node_layer[a],
-                   "y1": centers[a][1], "y2": centers[b][1], "channel": None}
+            hop = {
+                "a": a,
+                "b": b,
+                "layer": node_layer[a],
+                "y1": centers[a][1],
+                "y2": centers[b][1],
+                "channel": None,
+            }
             hop_list.append(hop)
             if abs(hop["y1"] - hop["y2"]) >= 1:
                 risers_by_gap[node_layer[a]].append(hop)
@@ -721,7 +724,10 @@ def _add_diagram(definitions, model):
     # they never share a corridor. Narrower loops take the shallower lanes, so
     # wider loops nest cleanly underneath them.
     def _loop_span(idx):
-        src, tgt = positions[model["flows"][idx]["source"]], positions[model["flows"][idx]["target"]]
+        src, tgt = (
+            positions[model["flows"][idx]["source"]],
+            positions[model["flows"][idx]["target"]],
+        )
         return abs((src["x"] + src["w"]) - tgt["x"])
 
     loop_indices = sorted(
