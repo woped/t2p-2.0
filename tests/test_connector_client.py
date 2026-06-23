@@ -73,6 +73,29 @@ def test_generate_sends_contract_request(mock_post, connector, app):
 
 
 @patch("app.backend.connector_client.requests.post")
+def test_generate_forwards_prompting_strategy_when_provided(mock_post, connector, app):
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.json.return_value = {"raw_response": "ok"}
+
+    with app.app_context():
+        connector.generate(
+            authorization="Bearer secret-token",
+            user_text="hello",
+            provider="openai",
+            model="gpt-4o",
+            prompting_strategy="few_shot",
+        )
+
+    kwargs = mock_post.call_args.kwargs
+    assert kwargs["json"] == {
+        "user_text": "hello",
+        "provider": "openai",
+        "model": "gpt-4o",
+        "prompting_strategy": "few_shot",
+    }
+
+
+@patch("app.backend.connector_client.requests.post")
 def test_generate_5xx_raises_upstream_error(mock_post, connector, app):
     mock_post.return_value.status_code = 500
     mock_post.return_value.text = "Internal Server Error"
