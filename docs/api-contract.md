@@ -18,8 +18,7 @@ The `/v2` namespace is the current API. See the spec for full schemas.
 | GET  | `/v2/health`        | Shallow liveness check |
 
 Operational and meta endpoints, outside the `/v2` contract: `GET /_/_/echo`,
-`GET /example`, `GET /api/swagger.yaml` (the spec), and `GET /metrics`
-(Prometheus).
+`GET /example`, and `GET /metrics` (Prometheus).
 
 ### Deprecated endpoints
 
