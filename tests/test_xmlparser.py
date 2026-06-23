@@ -360,6 +360,48 @@ def test_assign_pnml_coordinates_lays_out_each_node():
     assert len(set(coords.values())) == 3
 
 
+def test_assign_pnml_coordinates_routes_back_edge_loops():
+    """A back-edge (rework loop) must get explicit arc bend points so every
+    client renders the loop the same way instead of auto-routing it.
+
+    Only the loop-closing arc is routed; the forward arcs stay waypoint-free
+    (short, ~horizontal hops the client can route itself)."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p1'/>"
+        "<transition id='review'/>"
+        "<place id='p2'/>"
+        "<transition id='rework'/>"
+        "<arc id='a1' source='p1' target='review'/>"
+        "<arc id='a2' source='review' target='p2'/>"
+        "<arc id='a3' source='p2' target='rework'/>"
+        "<arc id='a4' source='rework' target='review'/>"  # back-edge (loop)
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+
+    waypoints = {}
+    for arc in root.iter():
+        if arc.tag.split("}")[-1] == "arc":
+            positions = arc.findall("graphics/position")
+            waypoints[arc.get("id")] = positions
+
+    # The back-edge is routed with interior bend points; forward arcs are not.
+    assert len(waypoints["a4"]) >= 2, "loop arc got no bend points"
+    assert all(len(waypoints[fwd]) == 0 for fwd in ("a1", "a2", "a3"))
+
+    # The loop's bend points dip into a lane below the lowest node.
+    bottom_y = max(
+        int(pos.get("y"))
+        for node in root.iter()
+        if node.tag.split("}")[-1] in ("place", "transition")
+        for pos in [node.find("graphics/position")]
+        if pos is not None
+    )
+    assert any(int(p.get("y")) > bottom_y for p in waypoints["a4"])
+
+
 def test_assign_pnml_coordinates_passes_through_non_xml():
     """A non-XML payload (e.g. a transformer error string) is returned as-is."""
     assert assign_pnml_coordinates("not xml") == "not xml"

@@ -80,8 +80,9 @@ def _sugiyama_layout(
         ``{real_id: {"x", "y", "w", "h"}}`` (top-left corners, dummy nodes
         excluded) and *ctx* carries the routing metadata
         (``centers``, per-flow ``chains``, ``col_x``/``col_w`` column geometry,
-        ``node_layer`` and the ``is_dummy`` set) that :func:`_add_diagram` turns
-        into waypoints.
+        ``node_layer``, the ``is_dummy`` set and the ``back_edges`` set of
+        cycle-closing ``(source, target)`` pairs) that :func:`_add_diagram` and
+        :func:`assign_pnml_coordinates` turn into waypoints.
     """
     empty_ctx = {
         "centers": {},
@@ -90,6 +91,7 @@ def _sugiyama_layout(
         "col_w": {},
         "node_layer": {},
         "is_dummy": set(),
+        "back_edges": set(),
     }
     real_ids = list(elements_by_id.keys())
     if not real_ids:
@@ -260,22 +262,30 @@ def _sugiyama_layout(
         "col_w": col_w,
         "node_layer": node_layer,
         "is_dummy": is_dummy,
+        "back_edges": back_edges,
     }
     return positions, ctx
 
 
-def _layered_layout(
-    elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_offset=50
-):
-    """Return top-left ``{id: {x, y, w, h}}`` positions for *elements_by_id*.
+def _set_arc_waypoints(arc_el, points, ns_prefix):
+    """Write *points* as intermediate ``<graphics><position>`` bend points on an
+    ``<arc>``, replacing any the transformer left behind.
 
-    Thin wrapper over :func:`_sugiyama_layout` for callers (the PNML path) that
-    only need node coordinates and route their own edges.
+    WoPeD reads each ``<position>`` as an absolute-canvas bend point between the
+    arc's (implicit) source and target anchors, so only the interior points are
+    written -- the endpoints are derived from the node positions by the client.
     """
-    positions, _ = _sugiyama_layout(
-        elements_by_id, flows, h_gap, v_gap, x_offset, y_offset
-    )
-    return positions
+    graphics = arc_el.find(f"{ns_prefix}graphics")
+    if graphics is None:
+        graphics = ET.SubElement(arc_el, f"{ns_prefix}graphics")
+    for stale in graphics.findall(f"{ns_prefix}position"):
+        graphics.remove(stale)
+    for px, py in points:
+        ET.SubElement(
+            graphics,
+            f"{ns_prefix}position",
+            attrib={"x": str(int(round(px))), "y": str(int(round(py)))},
+        )
 
 
 def _label_width(elem, ns_prefix):
@@ -298,7 +308,12 @@ def assign_pnml_coordinates(pnml_xml):
 
     Uses the same layered layout algorithm as the BPMN generator.  In PNML,
     ``<graphics><position>`` holds *centre* coordinates, so positions returned
-    by ``_layered_layout`` (top-left) are shifted by half the element size.
+    by ``_sugiyama_layout`` (top-left) are shifted by half the element size.
+
+    Back-edges (rework loops) are routed the same way as in BPMN: each gets its
+    own horizontal lane beneath the diagram, written as ``<arc>`` bend points,
+    so loops do not depend on each client's own arc routing (which differs and
+    would otherwise cut a straight line back across the columns).
 
     If *pnml_xml* is not valid XML the original string is returned unchanged.
 
@@ -349,13 +364,14 @@ def assign_pnml_coordinates(pnml_xml):
     if not elements_by_id:
         return pnml_xml  # nothing to lay out
 
-    flows = [
-        {"source": arc.get("source", ""), "target": arc.get("target", "")}
+    arcs = [
+        (arc, arc.get("source"), arc.get("target"))
         for arc in root.iter(f"{ns_prefix}arc")
         if arc.get("source") and arc.get("target")
     ]
+    flows = [{"source": src, "target": tgt} for _, src, tgt in arcs]
 
-    positions = _layered_layout(
+    positions, ctx = _sugiyama_layout(
         elements_by_id, flows, h_gap=80, v_gap=50, x_offset=100, y_offset=100
     )
 
@@ -437,6 +453,32 @@ def assign_pnml_coordinates(pnml_xml):
                 for tag in ("operator", "trigger", "transitionResource", "subprocess")
             ):
                 elem.remove(ts)
+
+    # Route every back-edge (rework loop) through its own lane beneath the
+    # diagram, mirroring the BPMN generator. Without explicit bend points each
+    # client auto-routes the loop differently (a straight line back across the
+    # columns), so the rendering is unstable across the fat client and web. The
+    # waypoints share the node coordinate space, so no centre shift is needed.
+    back_edges = ctx["back_edges"]
+    loop_arcs = [
+        (arc, src, tgt)
+        for arc, src, tgt in arcs
+        if (src, tgt) in back_edges and src in positions and tgt in positions
+    ]
+    if loop_arcs:
+        bottom_y = max(p["y"] + p["h"] for p in positions.values())
+        # Narrower loops take the shallower lanes so wider loops nest under them.
+        loop_arcs.sort(
+            key=lambda a: abs(
+                (positions[a[1]]["x"] + positions[a[1]]["w"]) - positions[a[2]]["x"]
+            )
+        )
+        for k, (arc, src, tgt) in enumerate(loop_arcs):
+            lane_y = bottom_y + 50 + k * 45
+            # Drop the first/last point: those are the node anchors WoPeD derives
+            # itself; only the interior U-bend points are stored as bend points.
+            points = _loop_waypoints(positions[src], positions[tgt], lane_y)[1:-1]
+            _set_arc_waypoints(arc, points, ns_prefix)
 
     # Strip empty id="" attributes: the transformer's pydantic-xml models give
     # every element a default empty id, so <name>/<toolspecific>/<offset>/...
