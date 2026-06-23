@@ -408,14 +408,11 @@ def assign_pnml_coordinates(pnml_xml):
             ET.SubElement(name_el, f"{ns_prefix}text").text = ""
             elem.insert(0, name_el)
 
-        # The transformer stamps the same (20,20) default on the WoPeD
-        # <trigger>/<transitionResource> it attaches to every UserTask, and the
-        # fat client reads those as ABSOLUTE positions too -> they stack just
-        # like the names did. The <graphics> cannot simply be dropped: the fat
-        # client dereferences trigger.getGraphics().getPosition() without a
-        # null-check (NPE). So an empty resource marker (no role/orga) is pure
-        # noise and is removed outright; a real trigger/resource is repositioned
-        # next to its transition (WoPeD's own offsets) so it no longer collapses.
+        # The transformer marks every UserTask with a WoPeD
+        # <trigger>/<transitionResource> -- that marker is how the reverse
+        # (pnml->bpmn) direction tells a UserTask from a plain Task, so it is
+        # kept even with no role/orga. But an EMPTY marker (no role/orga) is
+        # meaningless to clients, so strip it here.
         for ts in elem.findall(f"{ns_prefix}toolspecific"):
             trigger = ts.find(f"{ns_prefix}trigger")
             resource = ts.find(f"{ns_prefix}transitionResource")
@@ -425,22 +422,9 @@ def assign_pnml_coordinates(pnml_xml):
             if trigger is not None and trigger.get("type") == "200" and resource_empty:
                 ts.remove(trigger)
                 ts.remove(resource)
-            else:
-                for sub, dx, dy in ((trigger, 10, -22), (resource, -5, -45)):
-                    if sub is None:
-                        continue
-                    sub_graphics = sub.find(f"{ns_prefix}graphics")
-                    if sub_graphics is None:
-                        continue
-                    sub_pos = sub_graphics.find(f"{ns_prefix}position")
-                    if sub_pos is None:
-                        sub_pos = ET.SubElement(sub_graphics, f"{ns_prefix}position")
-                    sub_pos.set("x", str(cx + dx))
-                    sub_pos.set("y", str(cy + dy))
-            # A <toolspecific> left with only the transformer's default time
-            # block (no operator/trigger/resource/subprocess) carries no
-            # information -- e.g. a UserTask whose empty resource marker was just
-            # removed. Drop it so plain transitions stay clean.
+            # A <toolspecific> left with nothing meaningful (e.g. a UserTask whose
+            # empty resource marker was just removed) carries no information --
+            # drop it so plain transitions stay clean.
             if not any(
                 ts.find(f"{ns_prefix}{tag}") is not None
                 for tag in ("operator", "trigger", "transitionResource", "subprocess")
