@@ -15,6 +15,12 @@ _BPMN_GATEWAY_W, _BPMN_GATEWAY_H = 50, 50
 _PNML_PLACE_W, _PNML_PLACE_H = 50, 50
 _PNML_TRANS_W, _PNML_TRANS_H = 50, 30
 
+# Approximate glyph width (px) of WoPeD's small label font (~11px). Labels are
+# drawn centred BELOW the node, so the layout must reserve at least the label's
+# width per column or adjacent labels overlap. Used to widen columns to fit the
+# text instead of the node box alone.
+_LABEL_CHAR_PX = 7
+
 # Maps a model event "type" to its BPMN element tag; anything unrecognised
 # becomes a generic intermediateCatchEvent.
 _EVENT_TYPE_MAP = {
@@ -272,6 +278,20 @@ def _layered_layout(
     return positions
 
 
+def _label_width(elem, ns_prefix):
+    """Estimate the rendered width (px) of a node's label from ``<name><text>``.
+
+    WoPeD draws the name centred below the node, so a long name needs a wider
+    column than the node box to keep it from overlapping its neighbours.
+    Returns 0 for unnamed nodes (e.g. silent places).
+    """
+    name = elem.find(f"{ns_prefix}name")
+    text = name.find(f"{ns_prefix}text") if name is not None else None
+    if text is None or not text.text:
+        return 0
+    return len(text.text.strip()) * _LABEL_CHAR_PX
+
+
 def assign_pnml_coordinates(pnml_xml):
     """Parse a PNML XML string and assign proper layout coordinates to all
     places and transitions.
@@ -315,13 +335,15 @@ def assign_pnml_coordinates(pnml_xml):
     for place in root.iter(f"{ns_prefix}place"):
         pid = place.get("id")
         if pid:
-            elements_by_id[pid] = {"w": _PNML_PLACE_W, "h": _PNML_PLACE_H}
+            w = max(_PNML_PLACE_W, _label_width(place, ns_prefix))
+            elements_by_id[pid] = {"w": w, "h": _PNML_PLACE_H}
             elem_xml_map[pid] = place
 
     for trans in root.iter(f"{ns_prefix}transition"):
         tid = trans.get("id")
         if tid:
-            elements_by_id[tid] = {"w": _PNML_TRANS_W, "h": _PNML_TRANS_H}
+            w = max(_PNML_TRANS_W, _label_width(trans, ns_prefix))
+            elements_by_id[tid] = {"w": w, "h": _PNML_TRANS_H}
             elem_xml_map[tid] = trans
 
     if not elements_by_id:
@@ -355,6 +377,73 @@ def assign_pnml_coordinates(pnml_xml):
             position_el = ET.SubElement(graphics, f"{ns_prefix}position")
         position_el.set("x", str(cx))
         position_el.set("y", str(cy))
+
+        # Drop the node name's <graphics>: the transformer stamps a constant
+        # name offset (e.g. (20,20)) on every node, which the WoPeD fat client
+        # reads as the label's ABSOLUTE canvas position -> all labels collapse
+        # onto that one point. We carry no real per-label position, so removing
+        # it lets each client place the label by its own native rule (the fat
+        # client centres it just below the node). Clients that ignore the offset
+        # are unaffected. Anonymous nodes (silent/start/end places, operator
+        # helper transitions) carry no <name>, so WoPeD falls back to showing
+        # the raw id ("SILENTFROMxTOy", "startEvent1", ...) as a label -- long,
+        # ugly and overlapping. Give them an empty <name> so they render
+        # unlabelled instead.
+        name_el = elem.find(f"{ns_prefix}name")
+        if name_el is None:
+            name_el = ET.Element(f"{ns_prefix}name")
+            ET.SubElement(name_el, f"{ns_prefix}text").text = ""
+            elem.insert(0, name_el)
+        else:
+            name_graphics = name_el.find(f"{ns_prefix}graphics")
+            if name_graphics is not None:
+                name_el.remove(name_graphics)
+
+        # The transformer stamps the same (20,20) default on the WoPeD
+        # <trigger>/<transitionResource> it attaches to every UserTask, and the
+        # fat client reads those as ABSOLUTE positions too -> they stack just
+        # like the names did. The <graphics> cannot simply be dropped: the fat
+        # client dereferences trigger.getGraphics().getPosition() without a
+        # null-check (NPE). So an empty resource marker (no role/orga) is pure
+        # noise and is removed outright; a real trigger/resource is repositioned
+        # next to its transition (WoPeD's own offsets) so it no longer collapses.
+        for ts in elem.findall(f"{ns_prefix}toolspecific"):
+            trigger = ts.find(f"{ns_prefix}trigger")
+            resource = ts.find(f"{ns_prefix}transitionResource")
+            resource_empty = resource is not None and not (
+                resource.get("roleName") or resource.get("organizationalUnitName")
+            )
+            if trigger is not None and trigger.get("type") == "200" and resource_empty:
+                ts.remove(trigger)
+                ts.remove(resource)
+            else:
+                for sub, dx, dy in ((trigger, 10, -22), (resource, -5, -45)):
+                    if sub is None:
+                        continue
+                    sub_graphics = sub.find(f"{ns_prefix}graphics")
+                    if sub_graphics is None:
+                        continue
+                    sub_pos = sub_graphics.find(f"{ns_prefix}position")
+                    if sub_pos is None:
+                        sub_pos = ET.SubElement(sub_graphics, f"{ns_prefix}position")
+                    sub_pos.set("x", str(cx + dx))
+                    sub_pos.set("y", str(cy + dy))
+            # A <toolspecific> left with only the transformer's default time
+            # block (no operator/trigger/resource/subprocess) carries no
+            # information -- e.g. a UserTask whose empty resource marker was just
+            # removed. Drop it so plain transitions stay clean.
+            if not any(
+                ts.find(f"{ns_prefix}{tag}") is not None
+                for tag in ("operator", "trigger", "transitionResource", "subprocess")
+            ):
+                elem.remove(ts)
+
+    # Strip empty id="" attributes: the transformer's pydantic-xml models give
+    # every element a default empty id, so <name>/<toolspecific>/<offset>/...
+    # carry a meaningless id="". Real node/arc ids are never empty.
+    for el in root.iter():
+        if el.get("id") == "":
+            del el.attrib["id"]
 
     ET.indent(ET.ElementTree(root), space="  ", level=0)
     return ET.tostring(root, encoding="unicode")
