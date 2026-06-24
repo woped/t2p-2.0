@@ -58,14 +58,25 @@ def test_generate_pnml_lowercase_route(client):
 
 
 def test_app_has_swagger_ui():
-    """Test that Swagger UI blueprint is registered"""
+    """Test that Swagger UI endpoint is exposed via Flasgger."""
     from app import create_app
 
     app = create_app()
-    # Check if swagger blueprint exists
-    blueprints = [bp for bp in app.blueprints.keys()]
-    # Swagger UI typically registers as 'swagger_ui'
-    assert len(blueprints) > 0
+    with app.test_client() as client:
+        response = client.get("/swagger/")
+        assert response.status_code == 200
+
+
+def test_openapi_endpoint_exposed():
+    from app import create_app
+
+    app = create_app()
+    with app.test_client() as client:
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+        data = response.get_json()
+        assert "openapi" in data
+        assert "paths" in data
 
 
 def test_app_configuration():

@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 import logging
+import re
 from collections import deque
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,78 @@ ET.register_namespace("bpmndi", _NS["bpmndi"])
 ET.register_namespace("di", _NS["di"])
 ET.register_namespace("dc", _NS["dc"])
 ET.register_namespace("xsi", _NS["xsi"])
+
+
+_TASK_PREFIX_RE = re.compile(r"^\[(?:UserTask|ServiceTask)\]\s*", re.IGNORECASE)
+_WS_RE = re.compile(r"\s+")
+_PUNCT_RE = re.compile(r"[^a-z0-9\-\s]")
+
+
+def _normalize_transition_label(text):
+    """Normalize transition label text to a plain infinitive-style phrase.
+
+    The transformer decorates task labels with a type prefix
+    (e.g. "[UserTask] ..."). Remove that decoration and emit a normalized
+    lower-case phrase.
+    """
+    if not text:
+        return text
+
+    normalized = _TASK_PREFIX_RE.sub("", text.strip())
+    normalized = _PUNCT_RE.sub(" ", normalized.lower())
+    normalized = _WS_RE.sub(" ", normalized).strip()
+    return normalized
+
+
+def _rename_places_and_update_arcs(root, ns_prefix):
+    """Rename place IDs to P1..Pn and update arc source/target references."""
+    places = [place for place in root.iter(f"{ns_prefix}place") if place.get("id")]
+    if not places:
+        return
+
+    # Preserve XML order for stable, human-friendly numbering.
+    id_map = {place.get("id"): f"P{idx}" for idx, place in enumerate(places, start=1)}
+
+    for place in places:
+        old_id = place.get("id")
+        place.set("id", id_map[old_id])
+
+    used_arc_ids = set()
+    for arc in root.iter(f"{ns_prefix}arc"):
+        src = arc.get("source")
+        tgt = arc.get("target")
+        if src in id_map:
+            src = id_map[src]
+            arc.set("source", src)
+        if tgt in id_map:
+            tgt = id_map[tgt]
+            arc.set("target", tgt)
+
+        if src and tgt:
+            base_id = f"{src}TO{tgt}"
+            new_id = base_id
+            suffix = 2
+            while new_id in used_arc_ids:
+                new_id = f"{base_id}_{suffix}"
+                suffix += 1
+            arc.set("id", new_id)
+            used_arc_ids.add(new_id)
+
+
+def _normalize_transition_labels(root, ns_prefix):
+    """Normalize PNML transition labels to a plain lower-case phrase."""
+    for transition in root.iter(f"{ns_prefix}transition"):
+        name = transition.find(f"{ns_prefix}name")
+        if name is None:
+            continue
+
+        text_el = name.find(f"{ns_prefix}text")
+        if text_el is None or text_el.text is None:
+            continue
+
+        normalized = _normalize_transition_label(text_el.text)
+        if normalized:
+            text_el.text = normalized
 
 
 def _layered_layout(
@@ -168,6 +241,9 @@ def assign_pnml_coordinates(pnml_xml):
     # Register the namespace so ET.tostring() preserves the default namespace.
     if ns_prefix:
         ET.register_namespace("", ns_prefix[1:-1])
+
+    _rename_places_and_update_arcs(root, ns_prefix)
+    _normalize_transition_labels(root, ns_prefix)
 
     # Collect all places and transitions from the entire tree (handles
     # nested <pnml><net><page>... hierarchies).

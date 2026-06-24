@@ -25,6 +25,7 @@ def test_v2_generate_bpmn_success(mock_cc, client):
         user_text="describe a process",
         provider="openai",
         model="gpt-4o",
+        prompting_strategy=None,
     )
 
 
@@ -86,6 +87,7 @@ def test_v2_generate_forwards_missing_auth_and_relays_401(mock_cc, client):
         user_text="describe a process",
         provider="openai",
         model="gpt-4o",
+        prompting_strategy=None,
     )
 
 
@@ -112,6 +114,7 @@ def test_v2_generate_forwards_missing_field_and_relays_400(mock_cc, client):
         user_text="x",
         provider="openai",
         model=None,
+        prompting_strategy=None,
     )
 
 
@@ -142,6 +145,7 @@ def test_v2_generate_non_json_is_forwarded_as_empty(mock_cc, client):
         user_text=None,
         provider=None,
         model=None,
+        prompting_strategy=None,
     )
 
 
@@ -279,6 +283,28 @@ def test_legacy_bpmn_uses_default_model_and_builds_bpmn(mock_cc, client):
         user_text="describe a process",
         provider="openai",
         model="gpt-4o",
+        prompting_strategy=None,
+    )
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_v2_generate_bpmn_forwards_few_shot_strategy(mock_cc, client):
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+
+    resp = client.post(
+        "/v2/generate/bpmn",
+        json={**BODY, "prompting_strategy": "few_shot"},
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    assert "<definitions" in resp.get_json()["result"]
+    mock_cc.return_value.generate.assert_called_once_with(
+        authorization="Bearer secret-token",
+        user_text="describe a process",
+        provider="openai",
+        model="gpt-4o",
+        prompting_strategy="few_shot",
     )
 
 

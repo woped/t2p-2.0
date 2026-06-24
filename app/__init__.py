@@ -1,9 +1,9 @@
 import logging
 import os
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request
 from flask_cors import CORS
 from config import config
-from flask_swagger_ui import get_swaggerui_blueprint
+from flasgger import Swagger
 from prometheus_client import (
     Counter,
     Histogram,
@@ -117,11 +117,39 @@ def create_app(config_name=None):
 
     app.register_blueprint(api_bp, url_prefix="")
 
-    # Swagger UI
-    SWAGGER_URL = "/swagger"
-    API_URL = "/api/swagger.yaml"
-    swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
-    app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
+    # Flasgger / OpenAPI setup.
+    swagger_template = {
+        "openapi": "3.0.2",
+        "info": {
+            "title": "WOPED T2P Orchestrator API",
+            "version": "2.1.0",
+            "description": "Text-to-model transformation service.",
+        },
+        "components": {
+            "securitySchemes": {
+                "bearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "The LLM provider API key, sent as a bearer token.",
+                }
+            }
+        },
+    }
+    swagger_config = {
+        "headers": [],
+        "specs": [
+            {
+                "endpoint": "openapi",
+                "route": "/openapi.json",
+                "rule_filter": lambda rule: True,
+                "model_filter": lambda tag: True,
+            }
+        ],
+        "static_url_path": "/flasgger_static",
+        "swagger_ui": True,
+        "specs_route": "/swagger/",
+    }
+    Swagger(app, template=swagger_template, config=swagger_config)
 
     # Create and register Prometheus metrics in the app context to avoid
     # duplicate registration when modules are imported multiple times.

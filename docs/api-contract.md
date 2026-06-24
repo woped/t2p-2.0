@@ -1,10 +1,10 @@
 # t2p-2.0 API
 
 The authoritative endpoint contract — paths, request/response schemas, status
-codes, and security — is the OpenAPI spec at [`app/api/swagger.yaml`](../app/api/swagger.yaml).
-It is served at runtime from `/api/swagger.yaml` and rendered as interactive docs
-at `/swagger`. This document is an overview; when it disagrees with the spec, the
-spec wins.
+codes, and security — is the generated OpenAPI spec served at runtime from
+`/openapi.json` (Flasgger). Interactive docs are rendered at `/swagger/`.
+This document is an overview; when it disagrees with the generated spec, the
+generated spec wins.
 
 ## Endpoints
 
@@ -18,8 +18,7 @@ The `/v2` namespace is the current API. See the spec for full schemas.
 | GET  | `/v2/health`        | Shallow liveness check |
 
 Operational and meta endpoints, outside the `/v2` contract: `GET /_/_/echo`,
-`GET /example`, `GET /api/swagger.yaml` (the spec), and `GET /metrics`
-(Prometheus).
+`GET /example`, and `GET /metrics` (Prometheus).
 
 ### Deprecated endpoints
 
@@ -76,7 +75,12 @@ connector repository's `docs/api-contract.md`):
 ```
 POST <connector>/generate
 Header: Authorization: Bearer <api_key>
-Body: { "user_text": string, "provider": string, "model": string }
+Body: {
+	"user_text": string,
+	"provider": string,
+	"model": string,
+	"prompting_strategy": string (optional: "zero_shot" | "few_shot")
+}
 Response 200: { "raw_response": string }
 ```
 
@@ -91,7 +95,8 @@ token (and raw-key extraction from it), JSON-body shape, required-field presence
 provider/model validation against its registry.
 
 t2p-2.0 therefore does **not** duplicate those guards on `/v2/generate/*`: it forwards
-the `Authorization` header and the body fields (`text`→`user_text`, `provider`, `model`)
+the `Authorization` header and the body fields (`text`→`user_text`, `provider`, `model`,
+optional `prompting_strategy`)
 verbatim and relays the connector's responses — including 4xx (`401 unauthorized`,
 `400 invalid_request`/`invalid_provider`) — to the client unchanged. A connector 5xx or an
 unreachable connector surfaces as `500 upstream_error`.
