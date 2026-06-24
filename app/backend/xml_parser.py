@@ -434,28 +434,16 @@ def assign_pnml_coordinates(pnml_xml):
     # Route every back-edge (rework loop) through its own lane beneath the
     # diagram, mirroring the BPMN generator. Without explicit bend points each
     # client auto-routes the loop differently (a straight line back across the
-    # columns), so the rendering is unstable across the fat client and web. The
-    # waypoints share the node coordinate space, so no centre shift is needed.
-    back_edges = ctx["back_edges"]
-    loop_arcs = [
-        (arc, src, tgt)
-        for arc, src, tgt in arcs
-        if (src, tgt) in back_edges and src in positions and tgt in positions
-    ]
-    if loop_arcs:
-        bottom_y = max(p["y"] + p["h"] for p in positions.values())
-        # Narrower loops take the shallower lanes so wider loops nest under them.
-        loop_arcs.sort(
-            key=lambda a: abs(
-                (positions[a[1]]["x"] + positions[a[1]]["w"]) - positions[a[2]]["x"]
-            )
-        )
-        for k, (arc, src, tgt) in enumerate(loop_arcs):
-            lane_y = bottom_y + 50 + k * 45
-            # Drop the first/last point: those are the node anchors WoPeD derives
-            # itself; only the interior U-bend points are stored as bend points.
-            points = _loop_waypoints(positions[src], positions[tgt], lane_y)[1:-1]
-            _set_arc_waypoints(arc, points, ns_prefix)
+    # columns), so the rendering is unstable across the fat client and web.
+    # Forward arcs stay waypoint-free (loops_only); arcs and flows are aligned.
+    routes = _route_edges(positions, ctx, flows, "loops_only")
+    for idx, (arc, _src, _tgt) in enumerate(arcs):
+        points = routes[idx]
+        if not points:
+            continue
+        # Drop the first/last point: those are the node anchors WoPeD derives
+        # itself; only the interior U-bend points are stored as bend points.
+        _set_arc_waypoints(arc, points[1:-1], ns_prefix)
 
     # Strip empty id="" attributes: the transformer's pydantic-xml models give
     # every element a default empty id, so <name>/<toolspecific>/<offset>/...
@@ -558,6 +546,159 @@ def _loop_waypoints(src, tgt, lane_y):
     ]
 
 
+def _route_edges(positions, ctx, flows, strategy):
+    """Compute waypoint polylines for *flows*, keyed by flow index.
+
+    Returns ``{index: [(x, y), ...]}``; each polyline includes its end anchors.
+    ``strategy``:
+      * ``"full_ortho"`` -- route every edge orthogonally. Vertical risers live
+        in the gaps between columns (one channel per riser) and edges sharing a
+        split source or join target bundle onto a shared channel.
+      * ``"loops_only"`` -- route only back-edges; forward edges get ``[]``.
+    Back-edges always go through their own lane below the diagram, regardless of
+    strategy.
+    """
+    centers = ctx["centers"]
+    chains = ctx["chains"]
+    col_x = ctx["col_x"]
+    col_w = ctx["col_w"]
+    node_layer = ctx["node_layer"]
+    is_dummy = ctx["is_dummy"]
+
+    # A real node connects at its right/left border; a routing dummy is a single
+    # point at its centre.
+    def _exit_x(nid):
+        return (
+            centers[nid][0]
+            if nid in is_dummy
+            else positions[nid]["x"] + positions[nid]["w"]
+        )
+
+    def _entry_x(nid):
+        return centers[nid][0] if nid in is_dummy else positions[nid]["x"]
+
+    def _is_regular(chain):
+        """True when *chain* is a forward run of adjacent-layer hops."""
+        if not chain or len(chain) < 2:
+            return False
+        for a, b in zip(chain, chain[1:]):
+            if a not in node_layer or b not in node_layer:
+                return False
+            if node_layer[b] != node_layer[a] + 1:
+                return False
+        return True
+
+    # Classify every flow into forward hops (grouped by the gap they cross) or a
+    # loop (back-edge); collect the risers that need a vertical channel.
+    hops_by_flow: dict[int, list] = {}
+    risers_by_gap: dict[int, list] = defaultdict(list)
+    for idx, flow in enumerate(flows):
+        chain = chains[idx]
+        if not _is_regular(chain):
+            hops_by_flow[idx] = None
+            continue
+        hop_list = []
+        for a, b in zip(chain, chain[1:]):
+            hop = {
+                "a": a,
+                "b": b,
+                "layer": node_layer[a],
+                "y1": centers[a][1],
+                "y2": centers[b][1],
+                "channel": None,
+            }
+            hop_list.append(hop)
+            if abs(hop["y1"] - hop["y2"]) >= 1:
+                risers_by_gap[node_layer[a]].append(hop)
+        hops_by_flow[idx] = hop_list
+
+    if strategy == "full_ortho":
+        for lyr, hops in risers_by_gap.items():
+            gap_lo = col_x[lyr] + col_w[lyr]
+            gap_hi = col_x[lyr + 1]
+            # Edges sharing a target (a join) or a source (a split) collapse onto
+            # one shared channel, so they turn at the same x and meet at a single
+            # point instead of stair-stepping. Other hops each get their own.
+            out_count: dict[str, int] = defaultdict(int)
+            in_count: dict[str, int] = defaultdict(int)
+            for hop in hops:
+                out_count[hop["a"]] += 1
+                in_count[hop["b"]] += 1
+            bundles: dict[tuple, list] = {}
+            for hop in hops:
+                if in_count[hop["b"]] > 1:
+                    key = ("in", hop["b"])
+                elif out_count[hop["a"]] > 1:
+                    key = ("out", hop["a"])
+                else:
+                    key = ("single", id(hop))
+                bundles.setdefault(key, []).append(hop)
+            # Lay channels left-to-right: splits near their source, joins near
+            # their target, singletons between; break ties by mean height.
+            kind_rank = {"out": 0, "single": 1, "in": 2}
+
+            def _bundle_key(key):
+                ys = [(h["y1"] + h["y2"]) / 2 for h in bundles[key]]
+                return (kind_rank[key[0]], sum(ys) / len(ys))
+
+            ordered = sorted(bundles, key=_bundle_key)
+            count = len(ordered)
+            for i, key in enumerate(ordered):
+                channel = gap_lo + (i + 1) * (gap_hi - gap_lo) / (count + 1)
+                for hop in bundles[key]:
+                    hop["channel"] = channel
+
+    bottom_y = max((p["y"] + p["h"] for p in positions.values()), default=0)
+
+    def _loop_span(idx):
+        src = positions[flows[idx]["source"]]
+        tgt = positions[flows[idx]["target"]]
+        return abs((src["x"] + src["w"]) - tgt["x"])
+
+    # Each loop gets its own lane below the diagram; narrower loops take the
+    # shallower lanes so wider loops nest cleanly underneath them.
+    loop_indices = sorted(
+        (
+            i
+            for i, hops in hops_by_flow.items()
+            if hops is None
+            and flows[i]["source"] in positions
+            and flows[i]["target"] in positions
+        ),
+        key=_loop_span,
+    )
+    loop_lane = {idx: bottom_y + 50 + k * 45 for k, idx in enumerate(loop_indices)}
+
+    routes: dict[int, list] = {}
+    for idx, flow in enumerate(flows):
+        hop_list = hops_by_flow[idx]
+        if hop_list is None:
+            if idx in loop_lane:
+                routes[idx] = _loop_waypoints(
+                    positions[flow["source"]],
+                    positions[flow["target"]],
+                    loop_lane[idx],
+                )
+            else:
+                routes[idx] = []
+        elif strategy == "full_ortho":
+            chain = chains[idx]
+            points = [(_exit_x(chain[0]), centers[chain[0]][1])]
+            for hop in hop_list:
+                target_pt = (_entry_x(hop["b"]), hop["y2"])
+                if abs(hop["y1"] - hop["y2"]) < 1:
+                    points.append(target_pt)
+                else:
+                    channel = hop["channel"]
+                    points.append((channel, hop["y1"]))
+                    points.append((channel, hop["y2"]))
+                    points.append(target_pt)
+            routes[idx] = points
+        else:
+            routes[idx] = []
+    return routes
+
+
 def _add_diagram(definitions, model):
     """Add the BPMN diagram interchange (layout + shapes + edges).
 
@@ -590,12 +731,6 @@ def _add_diagram(definitions, model):
     positions, ctx = _sugiyama_layout(
         sizes, model["flows"], h_gap=180, v_gap=90, x_offset=50, y_offset=50
     )
-    centers = ctx["centers"]
-    chains = ctx["chains"]
-    col_x = ctx["col_x"]
-    col_w = ctx["col_w"]
-    node_layer = ctx["node_layer"]
-    is_dummy = ctx["is_dummy"]
 
     for element in model["tasks"] + model["events"] + model["gateways"]:
         bpmn_shape = ET.SubElement(
@@ -618,135 +753,15 @@ def _add_diagram(definitions, model):
     if not model["flows"]:
         return
 
-    # Edge geometry helpers: a real node connects at its right/left border, a
-    # routing dummy is a single point at its centre.
-    def _exit_x(nid):
-        return (
-            centers[nid][0]
-            if nid in is_dummy
-            else positions[nid]["x"] + positions[nid]["w"]
-        )
-
-    def _entry_x(nid):
-        return centers[nid][0] if nid in is_dummy else positions[nid]["x"]
-
-    def _is_regular(chain):
-        """True when *chain* is a forward run of adjacent-layer hops."""
-        if not chain or len(chain) < 2:
-            return False
-        for a, b in zip(chain, chain[1:]):
-            if a not in node_layer or b not in node_layer:
-                return False
-            if node_layer[b] != node_layer[a] + 1:
-                return False
-        return True
-
-    # Pass 1: gather every hop needing a vertical riser, grouped by the gap it
-    # crosses (keyed by the hop's source layer) so each gap can hand out its own
-    # channels.
-    hops_by_flow: dict[int, list] = {}
-    risers_by_gap: dict[int, list] = defaultdict(list)
-    for idx, flow in enumerate(model["flows"]):
-        chain = chains[idx]
-        if not _is_regular(chain):
-            hops_by_flow[idx] = None
-            continue
-        hop_list = []
-        for a, b in zip(chain, chain[1:]):
-            hop = {
-                "a": a,
-                "b": b,
-                "layer": node_layer[a],
-                "y1": centers[a][1],
-                "y2": centers[b][1],
-                "channel": None,
-            }
-            hop_list.append(hop)
-            if abs(hop["y1"] - hop["y2"]) >= 1:
-                risers_by_gap[node_layer[a]].append(hop)
-        hops_by_flow[idx] = hop_list
-
-    for lyr, hops in risers_by_gap.items():
-        gap_lo = col_x[lyr] + col_w[lyr]
-        gap_hi = col_x[lyr + 1]
-        # Bundle hops that should bend together: edges sharing a target (a join)
-        # or a source (a split) collapse onto one shared channel, so they turn at
-        # the same x and meet at a single point instead of stair-stepping. Other
-        # hops each get their own channel.
-        out_count: dict[str, int] = defaultdict(int)
-        in_count: dict[str, int] = defaultdict(int)
-        for hop in hops:
-            out_count[hop["a"]] += 1
-            in_count[hop["b"]] += 1
-        bundles: dict[tuple, list] = {}
-        for hop in hops:
-            if in_count[hop["b"]] > 1:
-                key = ("in", hop["b"])
-            elif out_count[hop["a"]] > 1:
-                key = ("out", hop["a"])
-            else:
-                key = ("single", id(hop))
-            bundles.setdefault(key, []).append(hop)
-        # Lay the channels out left-to-right: splits near their source, joins near
-        # their target, singletons in between; break ties by mean height.
-        kind_rank = {"out": 0, "single": 1, "in": 2}
-
-        def _bundle_key(key):
-            ys = [(h["y1"] + h["y2"]) / 2 for h in bundles[key]]
-            return (kind_rank[key[0]], sum(ys) / len(ys))
-
-        ordered = sorted(bundles, key=_bundle_key)
-        count = len(ordered)
-        for i, key in enumerate(ordered):
-            channel = gap_lo + (i + 1) * (gap_hi - gap_lo) / (count + 1)
-            for hop in bundles[key]:
-                hop["channel"] = channel
-
-    bottom_y = max((p["y"] + p["h"] for p in positions.values()), default=0)
-
-    # Give every loop/back edge its own horizontal lane beneath the diagram so
-    # they never share a corridor. Narrower loops take the shallower lanes, so
-    # wider loops nest cleanly underneath them.
-    def _loop_span(idx):
-        src, tgt = (
-            positions[model["flows"][idx]["source"]],
-            positions[model["flows"][idx]["target"]],
-        )
-        return abs((src["x"] + src["w"]) - tgt["x"])
-
-    loop_indices = sorted(
-        (i for i, hops in hops_by_flow.items() if hops is None), key=_loop_span
-    )
-    loop_lane = {idx: bottom_y + 50 + k * 45 for k, idx in enumerate(loop_indices)}
-
-    # Pass 2: emit each edge as a de-duplicated orthogonal polyline.
+    routes = _route_edges(positions, ctx, model["flows"], "full_ortho")
     for idx, flow in enumerate(model["flows"]):
         bpmn_edge = ET.SubElement(
             bpmn_plane,
             f"{{{_NS['bpmndi']}}}BPMNEdge",
             attrib={"id": f"{flow['id']}_di", "bpmnElement": flow["id"]},
         )
-
-        hop_list = hops_by_flow[idx]
-        if hop_list is None:
-            points = _loop_waypoints(
-                positions[flow["source"]], positions[flow["target"]], loop_lane[idx]
-            )
-        else:
-            chain = chains[idx]
-            points = [(_exit_x(chain[0]), centers[chain[0]][1])]
-            for hop in hop_list:
-                target_pt = (_entry_x(hop["b"]), hop["y2"])
-                if abs(hop["y1"] - hop["y2"]) < 1:
-                    points.append(target_pt)
-                else:
-                    channel = hop["channel"]
-                    points.append((channel, hop["y1"]))
-                    points.append((channel, hop["y2"]))
-                    points.append(target_pt)
-
         prev = None
-        for px, py in points:
+        for px, py in routes[idx]:
             point = (str(int(round(px))), str(int(round(py))))
             if point == prev:
                 continue
