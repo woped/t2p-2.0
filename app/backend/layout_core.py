@@ -1,4 +1,4 @@
-"""Layered (Sugiyama) layout + orthogonal edge routing, independent of XML format.
+"""Layered (Sugiyama) node placement + orthogonal edge routing, format-agnostic.
 
 Pure graph math: nodes are ``{id: {"w", "h"}}`` and edges
 ``[{"source", "target"}]``; the output is node positions plus waypoint polylines.
@@ -9,74 +9,17 @@ vocabulary.
 from collections import deque, defaultdict
 
 
-def _sugiyama_layout(
-    elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_offset=50
-):
-    """Compute a layered (Sugiyama-style) layout plus orthogonal edge routing.
+def _assign_layers(real_ids, successors):
+    """Stage 1 -- assign every node a layer (column).
 
-    The layout runs in the classic stages, each of which exists to keep edges
-    from crossing nodes or stacking on top of one another:
+    Breaks cycles with a DFS (an edge back to a node still on the stack is a
+    *back edge*, drawn as a loop later), then runs longest-path (Kahn) layering
+    over the acyclic skeleton. Returns ``(node_layer, back_edges)``.
 
-    1.  **Layering** – a longest-path assignment over the DAG of *flows* puts
-        every node in a column (layer). Cyclic or disconnected nodes are
-        appended to trailing layers so they are still placed.
-    2.  **Dummy nodes** – every forward edge that spans more than one layer is
-        split into unit-length hops by inserting a routing-only *dummy* node in
-        each layer it passes over. The dummy claims its own slot in that layer,
-        which reserves a clear lane for the edge so it never runs across the
-        nodes it skips.
-    3.  **Ordering** – a few barycenter sweeps reorder nodes within each layer to
-        reduce edge crossings.
-    4.  **Coordinates** – columns are placed left to right; each column is
-        stacked top to bottom and centred on a common midline so the layers stay
-        vertically aligned.
-
-    Args:
-        elements_by_id: ``{id: {"w": int, "h": int}}`` – node sizes in pixels.
-        flows: list of ``{"source": str, "target": str}`` dicts.
-        h_gap: horizontal gap between adjacent layers (pixels).
-        v_gap: vertical gap between nodes within a layer (pixels).
-        x_offset: left margin (pixels).
-        y_offset: top margin (pixels).
-
-    Returns:
-        ``(positions, ctx)`` where *positions* is
-        ``{real_id: {"x", "y", "w", "h"}}`` (top-left corners, dummy nodes
-        excluded) and *ctx* carries the routing metadata
-        (``centers``, per-flow ``chains``, ``col_x``/``col_w`` column geometry,
-        ``node_layer``, the ``is_dummy`` set and the ``back_edges`` set of
-        cycle-closing ``(source, target)`` pairs) that :func:`_add_diagram` and
-        :func:`assign_pnml_coordinates` turn into waypoints.
+    Without the cycle break, every node on a rework loop (e.g. "reopen claim ->
+    reassess") never reaches in-degree zero and gets scattered into a trailing
+    column, wrecking the diagram.
     """
-    empty_ctx = {
-        "centers": {},
-        "chains": [],
-        "col_x": {},
-        "col_w": {},
-        "node_layer": {},
-        "is_dummy": set(),
-        "back_edges": set(),
-    }
-    real_ids = list(elements_by_id.keys())
-    if not real_ids:
-        return {}, empty_ctx
-
-    # Build adjacency lists over the real nodes only.
-    successors: dict[str, list[str]] = {nid: [] for nid in real_ids}
-    predecessors: dict[str, list[str]] = {nid: [] for nid in real_ids}
-    for flow in flows:
-        src, tgt = flow.get("source", ""), flow.get("target", "")
-        if src in successors and tgt in predecessors:
-            successors[src].append(tgt)
-            predecessors[tgt].append(src)
-
-    # --- 1. Layering ---
-    # Break cycles first: a depth-first traversal classifies edges, and any edge
-    # pointing back to a node still on the DFS stack is a *back edge*. Removing
-    # those yields a DAG that lays out cleanly left-to-right; the back edges are
-    # drawn as loops by _add_diagram. Without this, every node on a rework loop
-    # (e.g. "reopen claim -> reassess") never reaches in-degree zero and used to
-    # be scattered into its own trailing column, wrecking the whole diagram.
     _WHITE, _GRAY, _BLACK = 0, 1, 2
     color = {nid: _WHITE for nid in real_ids}
     back_edges: set[tuple[str, str]] = set()
@@ -118,10 +61,18 @@ def _sugiyama_layout(
             indeg_work[nxt] -= 1
             if indeg_work[nxt] == 0:
                 topo_queue.append(nxt)
+    return node_layer, back_edges
 
-    # --- 2. Dummy nodes for forward edges that span more than one layer ---
-    node_w = {nid: elements_by_id[nid]["w"] for nid in real_ids}
-    node_h = {nid: elements_by_id[nid]["h"] for nid in real_ids}
+
+def _insert_dummies(flows, node_layer, node_w, node_h):
+    """Stage 2 -- split every forward edge spanning >= 2 layers into unit hops.
+
+    Inserts a size-0 *dummy* node in each layer the edge passes over (mutating
+    ``node_layer``/``node_w``/``node_h``), which claims a slot there and so
+    reserves a clear lane for the edge instead of letting it run across the
+    nodes it skips. Returns ``(chains, is_dummy)``: one node chain per flow
+    (index-aligned with *flows*) and the set of dummy ids.
+    """
     is_dummy: set[str] = set()
     chains: list[list[str]] = []  # one node chain per flow, index-aligned
     dummy_seq = 0
@@ -147,8 +98,17 @@ def _sugiyama_layout(
             chains.append(chain)
         else:
             chains.append([src, tgt])
+    return chains, is_dummy
 
-    # --- 3. Ordering within layers (barycenter sweeps) ---
+
+def _order_layers(node_layer, chains, is_dummy):
+    """Stage 3 -- order nodes within each layer to reduce edge crossings.
+
+    Builds the per-layer node lists, then runs barycenter sweeps: each node is
+    pulled toward the mean rank of its neighbours in the adjacent layer. Returns
+    ``(layers, up_adj, down_adj)`` -- the ordered layers and the layer-adjacency
+    used here and again by coordinate assignment.
+    """
     layers: dict[int, list[str]] = {}
     for nid, lyr in node_layer.items():
         layers.setdefault(lyr, []).append(nid)
@@ -193,7 +153,20 @@ def _sugiyama_layout(
         _sweep(range(1, max_layer + 1), up_adj)  # top-down using upper neighbours
         _sweep(range(max_layer - 1, -1, -1), down_adj)  # bottom-up using lower
 
-    # --- 4. Coordinate assignment ---
+    return layers, up_adj, down_adj
+
+
+def _assign_coordinates(
+    layers, node_w, node_h, is_dummy, h_gap, v_gap, x_offset, y_offset
+):
+    """Stage 4 -- assign pixel coordinates to the ordered layers.
+
+    Columns are placed left to right (column width = widest node in the layer);
+    within a column nodes are stacked top to bottom by ``v_gap`` and centred on a
+    common midline so the layers stay vertically aligned. Returns
+    ``(positions, centers, col_x, col_w)`` -- ``positions`` are top-left corners
+    of the real nodes; ``centers`` covers dummies too (for routing).
+    """
     sorted_layers = sorted(layers)
     col_w = {
         lyr: max((node_w[n] for n in layers[lyr]), default=0) for lyr in sorted_layers
@@ -224,6 +197,74 @@ def _sugiyama_layout(
             if nid not in is_dummy:
                 positions[nid] = {"x": int(elem_x), "y": int(round(y)), "w": w, "h": h}
             y += h + v_gap
+    return positions, centers, col_x, col_w
+
+
+def _sugiyama_layout(
+    elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_offset=50
+):
+    """Compute a layered (Sugiyama-style) node placement.
+
+    Runs the classic Sugiyama stages, each delegated to a helper, to keep edges
+    from crossing nodes or stacking on top of one another:
+
+    1. :func:`_assign_layers` -- cycle break + longest-path layering -> columns.
+    2. :func:`_insert_dummies` -- routing dummies for multi-layer forward edges.
+    3. :func:`_order_layers` -- barycenter sweeps to reduce crossings.
+    4. :func:`_assign_coordinates` -- columns left to right, stacked + aligned.
+
+    This stage only *places nodes*. It produces no edge waypoints and writes no
+    XML: it returns node positions plus the structural metadata (``ctx``) that
+    :func:`_route_edges` later turns into waypoints.
+
+    Args:
+        elements_by_id: ``{id: {"w": int, "h": int}}`` -- node sizes in pixels.
+        flows: list of ``{"source": str, "target": str}`` dicts.
+        h_gap: horizontal gap between adjacent layers (pixels).
+        v_gap: vertical gap between nodes within a layer (pixels).
+        x_offset: left margin (pixels).
+        y_offset: top margin (pixels).
+
+    Returns:
+        ``(positions, ctx)`` where *positions* is
+        ``{real_id: {"x", "y", "w", "h"}}`` (top-left corners, dummy nodes
+        excluded) and *ctx* carries the routing metadata (``centers``, per-flow
+        ``chains``, ``col_x``/``col_w`` column geometry, ``node_layer``, the
+        ``is_dummy`` set and the ``back_edges`` set of cycle-closing
+        ``(source, target)`` pairs).
+    """
+    empty_ctx = {
+        "centers": {},
+        "chains": [],
+        "col_x": {},
+        "col_w": {},
+        "node_layer": {},
+        "is_dummy": set(),
+        "back_edges": set(),
+    }
+    real_ids = list(elements_by_id.keys())
+    if not real_ids:
+        return {}, empty_ctx
+
+    # Adjacency over the real nodes only (endpoints outside the node set, e.g. a
+    # dangling flow, are dropped here and surface downstream).
+    successors: dict[str, list[str]] = {nid: [] for nid in real_ids}
+    for flow in flows:
+        src, tgt = flow.get("source", ""), flow.get("target", "")
+        if src in successors and tgt in successors:
+            successors[src].append(tgt)
+
+    node_layer, back_edges = _assign_layers(real_ids, successors)
+
+    node_w = {nid: elements_by_id[nid]["w"] for nid in real_ids}
+    node_h = {nid: elements_by_id[nid]["h"] for nid in real_ids}
+    chains, is_dummy = _insert_dummies(flows, node_layer, node_w, node_h)
+
+    layers, up_adj, down_adj = _order_layers(node_layer, chains, is_dummy)
+
+    positions, centers, col_x, col_w = _assign_coordinates(
+        layers, node_w, node_h, is_dummy, h_gap, v_gap, x_offset, y_offset
+    )
 
     ctx = {
         "centers": centers,
