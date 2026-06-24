@@ -156,14 +156,53 @@ def _order_layers(node_layer, chains, is_dummy):
     return layers, up_adj, down_adj
 
 
+def _isotonic_fit(values):
+    """Least-squares non-decreasing fit of *values* (pool-adjacent-violators).
+
+    The optimal way to push an ordered run of desired positions into a monotone
+    sequence with the least total movement -- the core of coordinate assignment.
+    """
+    blocks: list[list[float]] = []  # [sum, count] per pooled block
+    for v in values:
+        s, c = v, 1
+        while blocks and blocks[-1][0] / blocks[-1][1] > s / c:
+            ps, pc = blocks.pop()
+            s += ps
+            c += pc
+        blocks.append([s, c])
+    out: list[float] = []
+    for s, c in blocks:
+        out.extend([s / c] * c)
+    return out
+
+
+def _place_in_layer(ids, desired, node_h, v_gap):
+    """Set an ordered layer's node centres as close to *desired* as the non-
+    overlap constraint (>= ``v_gap`` between boxes) allows.
+
+    Subtracting each node's cumulative minimum offset turns the separation
+    constraint into plain monotonicity, solved exactly by :func:`_isotonic_fit`.
+    """
+    if not ids:
+        return {}
+    prefix = [0.0] * len(ids)
+    for i in range(1, len(ids)):
+        sep = node_h[ids[i - 1]] / 2 + v_gap + node_h[ids[i]] / 2
+        prefix[i] = prefix[i - 1] + sep
+    fit = _isotonic_fit([desired[ids[i]] - prefix[i] for i in range(len(ids))])
+    return {ids[i]: fit[i] + prefix[i] for i in range(len(ids))}
+
+
 def _assign_coordinates(
-    layers, node_w, node_h, is_dummy, h_gap, v_gap, x_offset, y_offset
+    layers, up_adj, down_adj, node_w, node_h, is_dummy, h_gap, v_gap, x_offset, y_offset
 ):
     """Stage 4 -- assign pixel coordinates to the ordered layers.
 
-    Columns are placed left to right (column width = widest node in the layer);
-    within a column nodes are stacked top to bottom by ``v_gap`` and centred on a
-    common midline so the layers stay vertically aligned. Returns
+    Columns go left to right (column width = widest node in the layer). The
+    vertical (cross-axis) coordinate is what makes edges straight: each node is
+    iteratively pulled toward the mean centre of its neighbours, and
+    :func:`_place_in_layer` resolves the resulting overlaps while keeping each
+    node as close to that target as the ``v_gap`` separation allows. Returns
     ``(positions, centers, col_x, col_w)`` -- ``positions`` are top-left corners
     of the real nodes; ``centers`` covers dummies too (for routing).
     """
@@ -177,26 +216,49 @@ def _assign_coordinates(
         col_x[lyr] = x
         x += col_w[lyr] + h_gap
 
-    def _layer_height(lyr):
-        nodes = layers[lyr]
-        if not nodes:
-            return 0
-        return sum(node_h[n] for n in nodes) + (len(nodes) - 1) * v_gap
+    # Initial centres: simple top-to-bottom stacking per layer.
+    yc: dict[str, float] = {}
+    for lyr in sorted_layers:
+        y = 0.0
+        for nid in layers[lyr]:
+            y += node_h[nid] / 2
+            yc[nid] = y
+            y += node_h[nid] / 2 + v_gap
 
-    max_height = max((_layer_height(lyr) for lyr in sorted_layers), default=0)
-    center_y = y_offset + max_height / 2
+    # Iteratively align each node with the mean centre of its neighbours (both
+    # adjacent layers), resolving overlaps after every layer. Alternating the
+    # sweep direction lets alignment propagate both ways; a few passes converge.
+    neighbours = {nid: up_adj[nid] + down_adj[nid] for nid in yc}
+    for sweep in range(8):
+        order = sorted_layers if sweep % 2 == 0 else sorted_layers[::-1]
+        for lyr in order:
+            ids = layers[lyr]
+            desired = {
+                nid: sum(yc[m] for m in neighbours[nid]) / len(neighbours[nid])
+                if neighbours[nid]
+                else yc[nid]
+                for nid in ids
+            }
+            yc.update(_place_in_layer(ids, desired, node_h, v_gap))
+
+    # Normalise so the topmost node sits at y_offset.
+    shift = y_offset - min((yc[n] - node_h[n] / 2 for n in yc), default=0.0)
 
     positions: dict[str, dict] = {}
     centers: dict[str, tuple] = {}
     for lyr in sorted_layers:
-        y = center_y - _layer_height(lyr) / 2
         for nid in layers[lyr]:
             w, h = node_w[nid], node_h[nid]
             elem_x = col_x[lyr] + (col_w[lyr] - w) // 2
-            centers[nid] = (elem_x + w / 2, y + h / 2)
+            cy = yc[nid] + shift
+            centers[nid] = (elem_x + w / 2, cy)
             if nid not in is_dummy:
-                positions[nid] = {"x": int(elem_x), "y": int(round(y)), "w": w, "h": h}
-            y += h + v_gap
+                positions[nid] = {
+                    "x": int(elem_x),
+                    "y": int(round(cy - h / 2)),
+                    "w": w,
+                    "h": h,
+                }
     return positions, centers, col_x, col_w
 
 
@@ -263,7 +325,16 @@ def _sugiyama_layout(
     layers, up_adj, down_adj = _order_layers(node_layer, chains, is_dummy)
 
     positions, centers, col_x, col_w = _assign_coordinates(
-        layers, node_w, node_h, is_dummy, h_gap, v_gap, x_offset, y_offset
+        layers,
+        up_adj,
+        down_adj,
+        node_w,
+        node_h,
+        is_dummy,
+        h_gap,
+        v_gap,
+        x_offset,
+        y_offset,
     )
 
     ctx = {
