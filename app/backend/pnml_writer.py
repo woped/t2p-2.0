@@ -1,8 +1,8 @@
-"""Lay out a transformer-produced PNML and tidy it for clients.
+"""Lay out a transformer-produced PNML.
 
 The transformer returns a geometry-free PNML; :func:`assign_pnml_coordinates`
 lays it out with the shared layout core (centre coordinates plus loop bend
-points) and :func:`_clean_pnml` removes client-facing noise.
+points) and :func:`_clean_pnml` strips the noise it leaves behind.
 """
 
 import logging
@@ -176,8 +176,8 @@ def assign_pnml_coordinates(pnml_xml):
         # itself; only the interior U-bend points are stored as bend points.
         _set_arc_waypoints(edge["element"], points[1:-1], ns_prefix)
 
-    # Tidy the PNML for clients (empty labels, empty markers, id="" noise).
-    # Independent of layout, so kept out of the layout steps above.
+    # Strip transformer noise (empty resource markers, id="" defaults) for a
+    # cleaner standard net. Independent of layout, kept out of the steps above.
     _clean_pnml(root, ns_prefix)
 
     ET.indent(ET.ElementTree(root), space="  ", level=0)
@@ -185,18 +185,14 @@ def assign_pnml_coordinates(pnml_xml):
 
 
 def _clean_pnml(root, ns_prefix):
-    """Tidy the transformer's PNML for clients, independent of layout.
+    """Strip noise the transformer leaves in the PNML -- no geometry, no client
+    workarounds, just a cleaner standard net:
 
-    Three client-facing fixes that are not geometry:
-
-    * Anonymous nodes (silent/start/end places, operator helper transitions)
-      carry no ``<name>``, so WoPeD would show the raw id ("SILENTFROMxTOy",
-      ...) as a label. Give them an empty ``<name>`` so they render unlabelled.
     * The transformer marks every UserTask with a WoPeD
       ``<trigger>``/``<transitionResource>`` -- that marker is how the reverse
       (pnml->bpmn) direction tells a UserTask from a plain Task, so it is kept
-      even with no role/orga. An EMPTY marker is meaningless to clients, so it
-      (and any ``<toolspecific>`` left empty by it) is dropped.
+      even with no role/orga. An EMPTY marker carries no information, so it (and
+      any ``<toolspecific>`` left empty by it) is dropped.
     * pydantic-xml gives every element a default empty ``id=""``; real node/arc
       ids are never empty, so the noise ids are stripped.
     """
@@ -204,12 +200,6 @@ def _clean_pnml(root, ns_prefix):
         root.iter(f"{ns_prefix}transition")
     )
     for elem in nodes:
-        name_el = elem.find(f"{ns_prefix}name")
-        if name_el is None:
-            name_el = ET.Element(f"{ns_prefix}name")
-            ET.SubElement(name_el, f"{ns_prefix}text").text = ""
-            elem.insert(0, name_el)
-
         for ts in elem.findall(f"{ns_prefix}toolspecific"):
             trigger = ts.find(f"{ns_prefix}trigger")
             resource = ts.find(f"{ns_prefix}transitionResource")
