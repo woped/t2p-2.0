@@ -5,17 +5,23 @@ Pure graph math: nodes are ``{id: {"w", "h"}}`` and edges
 The BPMN and PNML writers feed this and turn the result into their own diagram
 vocabulary.
 
-The four classic Sugiyama stages each use their textbook-grade variant:
+The three placement stages each use their textbook-grade variant:
 
 1. :func:`_assign_layers` -- DFS cycle break + longest-path layering, then a
    balancing (tightening) relaxation that pulls slack nodes toward their
    neighbours, the coordinate-descent counterpart of network-simplex's
    total-edge-length objective.
-2. :func:`_insert_dummies` -- routing dummies for multi-layer forward edges.
-3. :func:`_order_layers` -- weighted-median sweeps + adjacent transpose, keeping
+2. :func:`_order_layers` -- weighted-median sweeps + adjacent transpose, keeping
    the lowest-crossing ordering seen (the Gansner/STT heuristic).
-4. :func:`_assign_coordinates` -- Brandes-Köpf cross-axis alignment (four runs,
-   averaged) so straight runs stay perfectly aligned and long edges run straight.
+3. :func:`_assign_coordinates` -- Brandes-Köpf cross-axis alignment (four runs
+   averaged, which stays overlap-free) so straight runs stay aligned without the
+   diagonal drift of a single-corner placement.
+
+Edges that a straight line cannot draw cleanly -- loops and forward edges that
+span more than one layer -- are sent through dedicated horizontal lanes by
+:func:`_route_edges` rather than routed through interior routing dummies: the
+clients (and the spine) stay undistorted, and the lane is drawn below the shapes
+it would otherwise cut across.
 """
 
 from collections import deque, defaultdict
@@ -77,11 +83,11 @@ def _assign_layers(real_ids, successors):
 
     # Balancing (tightening) pass. Longest-path anchors every node at its
     # earliest feasible layer (ASAP); nodes with slack then sit far from their
-    # neighbours, inflating edge spans (and dummy count). Relax each interior
-    # node to the median of its neighbours' layers, clamped to the window that
-    # still respects precedence -- a coordinate-descent on the same total-edge-
-    # length objective network-simplex solves exactly, without the simplex
-    # machinery. Sources/sinks stay anchored so the layer count never grows.
+    # neighbours, inflating edge spans. Relax each interior node to the median of
+    # its neighbours' layers, clamped to the window that still respects
+    # precedence -- a coordinate-descent on the same total-edge-length objective
+    # network-simplex solves exactly, without the simplex machinery.
+    # Sources/sinks stay anchored so the layer count never grows.
     acyclic_pred: dict[str, list[str]] = {nid: [] for nid in real_ids}
     for nid in real_ids:
         for tgt in acyclic_succ[nid]:
@@ -108,43 +114,6 @@ def _assign_layers(real_ids, successors):
             break
 
     return node_layer, back_edges
-
-
-def _insert_dummies(flows, node_layer, node_w, node_h):
-    """Stage 2 -- split every forward edge spanning >= 2 layers into unit hops.
-
-    Inserts a size-0 *dummy* node in each layer the edge passes over (mutating
-    ``node_layer``/``node_w``/``node_h``), which claims a slot there and so
-    reserves a clear lane for the edge instead of letting it run across the
-    nodes it skips. Returns ``(chains, is_dummy)``: one node chain per flow
-    (index-aligned with *flows*) and the set of dummy ids.
-    """
-    is_dummy: set[str] = set()
-    chains: list[list[str]] = []  # one node chain per flow, index-aligned
-    dummy_seq = 0
-    for flow in flows:
-        src, tgt = flow.get("source", ""), flow.get("target", "")
-        if src not in node_layer or tgt not in node_layer:
-            # Missing endpoint: keep a direct chain; the absent shape surfaces
-            # as a KeyError in _add_diagram (mapped to invalid_model upstream).
-            chains.append([src, tgt])
-            continue
-        span = node_layer[tgt] - node_layer[src]
-        if span >= 2:
-            chain = [src]
-            for layer in range(node_layer[src] + 1, node_layer[tgt]):
-                dummy = f"__dummy_{dummy_seq}"
-                dummy_seq += 1
-                node_w[dummy] = 0
-                node_h[dummy] = 0
-                node_layer[dummy] = layer
-                is_dummy.add(dummy)
-                chain.append(dummy)
-            chain.append(tgt)
-            chains.append(chain)
-        else:
-            chains.append([src, tgt])
-    return chains, is_dummy
 
 
 def _median(positions):
@@ -181,34 +150,30 @@ def _inversions(seq):
     return cnt
 
 
-def _order_layers(node_layer, chains, is_dummy):
-    """Stage 3 -- order nodes within each layer to reduce edge crossings.
+def _order_layers(node_layer, flows):
+    """Stage 2 -- order nodes within each layer to reduce edge crossings.
 
     Weighted-median sweeps (alternating direction) reposition each node toward
-    the median slot of its fixed-layer neighbours; an adjacent-transpose pass
-    then greedily swaps neighbours whenever that lowers the crossing count. The
-    lowest-crossing ordering seen across iterations is kept (median + transpose
-    are not monotone on their own). Returns ``(layers, up_adj, down_adj)`` --
-    the ordered layers and the layer-adjacency reused by coordinate assignment.
+    the median slot of its neighbours in the adjacent layer; an adjacent-
+    transpose pass then greedily swaps neighbours whenever that lowers the
+    crossing count. The lowest-crossing ordering seen across iterations is kept
+    (median + transpose are not monotone on their own). Returns
+    ``(layers, up_adj, down_adj)`` -- the ordered layers and the layer-adjacency
+    (built from the adjacent-layer flows only) reused by coordinate assignment.
     """
     layers: dict[int, list[str]] = {}
     for nid, lyr in node_layer.items():
         layers.setdefault(lyr, []).append(nid)
-    # Deterministic start order: real nodes by id, dummies after.
     for lyr in layers:
-        layers[lyr].sort(key=lambda n: (n in is_dummy, n))
+        layers[lyr].sort()  # deterministic start order
 
     up_adj: dict[str, list[str]] = {nid: [] for nid in node_layer}
     down_adj: dict[str, list[str]] = {nid: [] for nid in node_layer}
-    for chain in chains:
-        for a, b in zip(chain, chain[1:]):
-            if (
-                a in node_layer
-                and b in node_layer
-                and node_layer[b] == node_layer[a] + 1
-            ):
-                down_adj[a].append(b)
-                up_adj[b].append(a)
+    for flow in flows:
+        a, b = flow.get("source"), flow.get("target")
+        if a in node_layer and b in node_layer and node_layer[b] == node_layer[a] + 1:
+            down_adj[a].append(b)
+            up_adj[b].append(a)
 
     sorted_layers = sorted(layers)
     if len(sorted_layers) < 2:
@@ -235,8 +200,12 @@ def _order_layers(node_layer, chains, is_dummy):
             indices, adj = range(1, len(sorted_layers)), up_adj
         else:  # bottom-up, by lower neighbours
             indices, adj = range(len(sorted_layers) - 2, -1, -1), down_adj
-        pos = _positions()
         for li in indices:
+            # Refresh positions per layer so each layer orders against the
+            # already-swept neighbour (Gauss-Seidel); a single snapshot per
+            # sweep would order against a stale configuration and barely cut
+            # crossings.
+            pos = _positions()
             row = layers[sorted_layers[li]]
             med = {v: _median(sorted(pos[x] for x in adj[v])) for v in row}
             movable = iter(
@@ -278,37 +247,6 @@ def _order_layers(node_layer, chains, is_dummy):
     layers = best_order
 
     return layers, up_adj, down_adj
-
-
-def _mark_type1_conflicts(order, upper, pos, is_dummy):
-    """Flag type-1 conflicts so Brandes-Köpf keeps inner segments straight.
-
-    An *inner segment* joins two dummy nodes in adjacent layers (a stretch of a
-    long edge). A type-1 conflict is a non-inner segment crossing an inner one;
-    marking it lets alignment give the inner segment priority, so long edges run
-    straight instead of being bent around. *upper* maps each node to its
-    neighbours in the previous layer (already sorted by *pos*).
-    """
-    marked: set[tuple[str, str]] = set()
-    for i in range(len(order) - 1):
-        upper_row, lower_row = order[i], order[i + 1]
-        k0 = 0
-        scan = 0
-        n_lower = len(lower_row)
-        for l1 in range(n_lower):
-            v = lower_row[l1]
-            inner_up = None
-            if v in is_dummy:
-                inner_up = next((u for u in upper[v] if u in is_dummy), None)
-            if l1 == n_lower - 1 or inner_up is not None:
-                k1 = pos[inner_up] if inner_up is not None else len(upper_row) - 1
-                while scan <= l1:
-                    for u in upper[lower_row[scan]]:
-                        if pos[u] < k0 or pos[u] > k1:
-                            marked.add((u, lower_row[scan]))
-                    scan += 1
-                k0 = k1
-    return marked
 
 
 def _bk_compaction(order, root, align, node_h, v_gap):
@@ -366,12 +304,14 @@ def _bk_compaction(order, root, align, node_h, v_gap):
     return x
 
 
-def _bk_run(layer_order, upper_adj, node_h, is_dummy, v_gap):
+def _bk_run(layer_order, upper_adj, node_h, v_gap):
     """One Brandes-Köpf alignment + compaction for a given graph orientation.
 
     *layer_order* is the layer stack top-to-bottom in this run's vertical
     direction; *upper_adj* maps each node to its neighbours in the previous
-    layer of that orientation. Returns a cross-axis coordinate per node.
+    layer of that orientation. Each node aligns to its median upper neighbour
+    (left to right, so alignments never cross). Returns a cross-axis coordinate
+    per node.
     """
     pos = {v: j for row in layer_order for j, v in enumerate(row)}
     upper = {
@@ -379,7 +319,6 @@ def _bk_run(layer_order, upper_adj, node_h, is_dummy, v_gap):
         for row in layer_order
         for v in row
     }
-    marked = _mark_type1_conflicts(layer_order, upper, pos, is_dummy)
 
     root = {v: v for row in layer_order for v in row}
     align = {v: v for row in layer_order for v in row}
@@ -393,7 +332,7 @@ def _bk_run(layer_order, upper_adj, node_h, is_dummy, v_gap):
             for m in ((d - 1) // 2, d // 2):  # one (odd) or two (even) medians
                 if align[v] == v:
                     u = ups[m]
-                    if (u, v) not in marked and r < pos[u]:
+                    if r < pos[u]:
                         align[u] = v
                         root[v] = root[u]
                         align[v] = root[u]
@@ -401,16 +340,22 @@ def _bk_run(layer_order, upper_adj, node_h, is_dummy, v_gap):
     return _bk_compaction(layer_order, root, align, node_h, v_gap)
 
 
-def _brandes_koepf(layers, up_adj, down_adj, node_h, is_dummy, v_gap):
+def _brandes_koepf(layers, up_adj, down_adj, node_h, v_gap):
     """Cross-axis (y) coordinate per node via Brandes-Köpf, four runs averaged.
 
     Runs the alignment from all four corners -- {align upward, downward} x
-    {pack leftward, rightward} -- and averages them. Each run keeps within-layer
-    separation, and they share the real within-layer order, so the average is
-    itself a feasible (overlap-free) placement while balancing the four biases;
-    averaging (rather than the median-of-two) is what guarantees that
-    feasibility. Long/straight runs come out aligned, which is what removes the
-    diagonal drift of a plain neighbour-mean placement.
+    {pack leftward, rightward} -- and averages them, which cancels each single
+    corner's diagonal drift while keeping straight runs aligned. Averaging is
+    deliberate over Brandes-Köpf's median-of-two combination: the median can
+    take its two middle values from *different* runs for two adjacent nodes,
+    distorting their separation, whereas the mean treats the four uniformly.
+
+    A final legalization sweep then enforces the within-layer gap in row order.
+    The class-offset compaction in a single run can occasionally under-separate
+    (even reorder) two same-layer neighbours, and the average inherits that; the
+    sweep guarantees an overlap-free result. It is a no-op on every layer the
+    runs already separated -- the common case -- so it does not perturb the
+    aligned, symmetric placements.
     """
     sorted_layers = sorted(layers)
     order = [layers[lyr] for lyr in sorted_layers]
@@ -427,22 +372,29 @@ def _brandes_koepf(layers, up_adj, down_adj, node_h, is_dummy, v_gap):
         (reflect(order[::-1]), down_adj, -1),  # align down, pack the other
     ]
     coords = [
-        {v: sign * val for v, val in _bk_run(o, adj, node_h, is_dummy, v_gap).items()}
+        {v: sign * val for v, val in _bk_run(o, adj, node_h, v_gap).items()}
         for o, adj, sign in runs
     ]
-    return {v: sum(c[v] for c in coords) / len(coords) for row in order for v in row}
+    yc = {v: sum(c[v] for c in coords) / len(coords) for row in order for v in row}
+
+    for row in order:
+        for above, below in zip(row, row[1:]):
+            need = node_h[above] / 2 + v_gap + node_h[below] / 2
+            if yc[below] - yc[above] < need:
+                yc[below] = yc[above] + need
+    return yc
 
 
 def _assign_coordinates(
-    layers, up_adj, down_adj, node_w, node_h, is_dummy, h_gap, v_gap, x_offset, y_offset
+    layers, up_adj, down_adj, node_w, node_h, h_gap, v_gap, x_offset, y_offset
 ):
-    """Stage 4 -- assign pixel coordinates to the ordered layers.
+    """Stage 3 -- assign pixel coordinates to the ordered layers.
 
     Columns go left to right (column width = widest node in the layer). The
     vertical (cross-axis) coordinate comes from :func:`_brandes_koepf`, which
-    keeps straight runs aligned and long edges straight. Returns
-    ``(positions, centers, col_x, col_w)`` -- ``positions`` are top-left corners
-    of the real nodes; ``centers`` covers dummies too (for routing).
+    keeps straight runs aligned. Returns ``(positions, centers, col_x, col_w)``
+    -- ``positions`` are top-left corners and ``centers`` are node centres (the
+    latter reused for edge routing).
     """
     sorted_layers = sorted(layers)
     col_w = {
@@ -454,7 +406,7 @@ def _assign_coordinates(
         col_x[lyr] = x
         x += col_w[lyr] + h_gap
 
-    yc = _brandes_koepf(layers, up_adj, down_adj, node_h, is_dummy, v_gap)
+    yc = _brandes_koepf(layers, up_adj, down_adj, node_h, v_gap)
 
     # Normalise so the topmost node sits at y_offset.
     shift = y_offset - min((yc[n] - node_h[n] / 2 for n in yc), default=0.0)
@@ -467,13 +419,12 @@ def _assign_coordinates(
             elem_x = col_x[lyr] + (col_w[lyr] - w) // 2
             cy = yc[nid] + shift
             centers[nid] = (elem_x + w / 2, cy)
-            if nid not in is_dummy:
-                positions[nid] = {
-                    "x": int(elem_x),
-                    "y": int(round(cy - h / 2)),
-                    "w": w,
-                    "h": h,
-                }
+            positions[nid] = {
+                "x": int(elem_x),
+                "y": int(round(cy - h / 2)),
+                "w": w,
+                "h": h,
+            }
     return positions, centers, col_x, col_w
 
 
@@ -482,13 +433,12 @@ def _sugiyama_layout(
 ):
     """Compute a layered (Sugiyama-style) node placement.
 
-    Runs the classic Sugiyama stages, each delegated to a helper, to keep edges
-    from crossing nodes or stacking on top of one another:
+    Runs the placement stages, each delegated to a helper, to keep nodes from
+    stacking on top of one another:
 
     1. :func:`_assign_layers` -- cycle break + longest-path layering + balance.
-    2. :func:`_insert_dummies` -- routing dummies for multi-layer forward edges.
-    3. :func:`_order_layers` -- median sweeps + transpose to reduce crossings.
-    4. :func:`_assign_coordinates` -- columns left to right, Brandes-Köpf y.
+    2. :func:`_order_layers` -- median sweeps + transpose to reduce crossings.
+    3. :func:`_assign_coordinates` -- columns left to right, Brandes-Köpf y.
 
     This stage only *places nodes*. It produces no edge waypoints and writes no
     XML: it returns node positions plus the structural metadata (``ctx``) that
@@ -504,19 +454,16 @@ def _sugiyama_layout(
 
     Returns:
         ``(positions, ctx)`` where *positions* is
-        ``{real_id: {"x", "y", "w", "h"}}`` (top-left corners, dummy nodes
-        excluded) and *ctx* carries the routing metadata (``centers``, per-flow
-        ``chains``, ``col_x``/``col_w`` column geometry, ``node_layer``, the
-        ``is_dummy`` set and the ``back_edges`` set of cycle-closing
+        ``{id: {"x", "y", "w", "h"}}`` (top-left corners) and *ctx* carries the
+        routing metadata (``centers``, ``col_x``/``col_w`` column geometry,
+        ``node_layer`` and the ``back_edges`` set of cycle-closing
         ``(source, target)`` pairs).
     """
     empty_ctx = {
         "centers": {},
-        "chains": [],
         "col_x": {},
         "col_w": {},
         "node_layer": {},
-        "is_dummy": set(),
         "back_edges": set(),
     }
     real_ids = list(elements_by_id.keys())
@@ -535,9 +482,8 @@ def _sugiyama_layout(
 
     node_w = {nid: elements_by_id[nid]["w"] for nid in real_ids}
     node_h = {nid: elements_by_id[nid]["h"] for nid in real_ids}
-    chains, is_dummy = _insert_dummies(flows, node_layer, node_w, node_h)
 
-    layers, up_adj, down_adj = _order_layers(node_layer, chains, is_dummy)
+    layers, up_adj, down_adj = _order_layers(node_layer, flows)
 
     positions, centers, col_x, col_w = _assign_coordinates(
         layers,
@@ -545,7 +491,6 @@ def _sugiyama_layout(
         down_adj,
         node_w,
         node_h,
-        is_dummy,
         h_gap,
         v_gap,
         x_offset,
@@ -554,23 +499,21 @@ def _sugiyama_layout(
 
     ctx = {
         "centers": centers,
-        "chains": chains,
         "col_x": col_x,
         "col_w": col_w,
         "node_layer": node_layer,
-        "is_dummy": is_dummy,
         "back_edges": back_edges,
     }
     return positions, ctx
 
 
 def _loop_waypoints(src, tgt, lane_y):
-    """Route a back-edge / same-layer edge as a U through the *lane_y* corridor.
+    """Route a back-edge / multi-layer edge as a U through the *lane_y* corridor.
 
-    Such edges point against the left-to-right flow, so a straight orthogonal
-    route would cut back across the columns. Dropping into a dedicated lane
-    beneath the diagram keeps them clear of every shape and forward edge; the
-    caller picks a distinct *lane_y* per loop so multiple loops do not overlap.
+    Such edges point against, or leap over, the left-to-right flow, so a
+    straight orthogonal route would cut back across (or through) the columns.
+    Dropping into a dedicated lane keeps them clear of every shape and forward
+    edge; the caller picks a distinct *lane_y* per edge so lanes do not overlap.
     """
     sx = src["x"] + src["w"]
     sy = src["y"] + src["h"] // 2
@@ -592,93 +535,64 @@ def _route_edges(positions, ctx, flows, strategy):
 
     Returns ``{index: [(x, y), ...]}``; each polyline includes its end anchors.
     ``strategy``:
-      * ``"full_ortho"`` -- route every edge orthogonally (BPMN's convention).
-        Vertical risers live in the gaps between columns (one channel per riser)
-        and edges sharing a split source or join target bundle onto a shared
-        channel.
+      * ``"full_ortho"`` -- route every adjacent-layer edge orthogonally (BPMN's
+        convention). Vertical risers live in the gaps between columns (one
+        channel per riser) and edges sharing a split source or join target
+        bundle onto a shared channel.
       * ``"sparse"`` -- route only what a straight line cannot draw cleanly:
-        loops, forward edges spanning more than one layer, and adjacent-layer
-        edges whose endpoints sit at different heights (a split/join fan, which
-        a straight line would draw as a diagonal). Flat adjacent-layer edges
-        stay straight (``[]``) -- correct and native for PNML.
-    Back-edges always go through their own lane below the diagram, regardless of
-    strategy.
+        adjacent-layer edges whose endpoints sit at different heights (a
+        split/join fan, which a straight line would draw as a diagonal). Flat
+        adjacent-layer edges stay straight (``[]``) -- correct and native for
+        PNML.
+    Loops (back-edges / same-layer) and forward edges spanning more than one
+    layer always go through their own horizontal lane below the diagram,
+    regardless of strategy.
     """
     centers = ctx["centers"]
-    chains = ctx["chains"]
     col_x = ctx["col_x"]
     col_w = ctx["col_w"]
     node_layer = ctx["node_layer"]
-    is_dummy = ctx["is_dummy"]
 
-    # A real node connects at its right/left border; a routing dummy is a single
-    # point at its centre.
-    def _exit_x(nid):
-        return (
-            centers[nid][0]
-            if nid in is_dummy
-            else positions[nid]["x"] + positions[nid]["w"]
-        )
+    def _span(flow):
+        """Layer distance target - source, or None if an endpoint is missing."""
+        src, tgt = flow.get("source"), flow.get("target")
+        if src not in node_layer or tgt not in node_layer:
+            return None
+        return node_layer[tgt] - node_layer[src]
 
-    def _entry_x(nid):
-        return centers[nid][0] if nid in is_dummy else positions[nid]["x"]
-
-    def _is_regular(chain):
-        """True when *chain* is a forward run of adjacent-layer hops."""
-        if not chain or len(chain) < 2:
-            return False
-        for a, b in zip(chain, chain[1:]):
-            if a not in node_layer or b not in node_layer:
-                return False
-            if node_layer[b] != node_layer[a] + 1:
-                return False
-        return True
-
-    # Classify every flow into a forward hop list or a loop (back-edge -> None).
-    hops_by_flow: dict[int, list] = {}
-    for idx in range(len(flows)):
-        chain = chains[idx]
-        if not _is_regular(chain):
-            hops_by_flow[idx] = None
-            continue
-        hops_by_flow[idx] = [
-            {
-                "a": a,
-                "b": b,
-                "layer": node_layer[a],
-                "y1": centers[a][1],
-                "y2": centers[b][1],
+    # Single adjacent-layer hops (span 1). Their height-changing members each get
+    # a vertical channel in the column gap; the rest are straight lines. Spans of
+    # >= 2 layers and loops route through lanes below (handled further down).
+    hop_by_flow: dict[int, dict] = {}
+    for idx, flow in enumerate(flows):
+        if _span(flow) == 1:
+            src, tgt = flow["source"], flow["target"]
+            hop_by_flow[idx] = {
+                "a": src,
+                "b": tgt,
+                "layer": node_layer[src],
+                "y1": centers[src][1],
+                "y2": centers[tgt][1],
                 "channel": None,
             }
-            for a, b in zip(chain, chain[1:])
-        ]
 
-    def _routed_forward(idx):
-        """Whether forward flow *idx* gets an orthogonal route, vs left straight."""
-        hops = hops_by_flow[idx]
-        if hops is None:
+    def _routed_hop(idx):
+        """Whether single-hop flow *idx* gets a route, vs being left straight."""
+        hop = hop_by_flow.get(idx)
+        if hop is None:
             return False
         if strategy == "full_ortho":
             return True
-        if len(hops) > 1:  # multi-layer span: must detour around skipped columns
-            return True
-        # Single adjacent-layer hop: route it only when it changes height (a
-        # split/join fan); a flat hop is a clean straight line, left to ``[]``.
-        return abs(hops[0]["y1"] - hops[0]["y2"]) >= 1
+        # Route a single hop only when it changes height (a split/join fan); a
+        # flat hop is a clean straight line, left to ``[]``.
+        return abs(hop["y1"] - hop["y2"]) >= 1
 
-    # Every height-changing hop of a routed forward edge needs a vertical channel
-    # in its column gap; collect them per gap (skipping edges left straight).
+    # Every height-changing routed hop needs a vertical channel in its column
+    # gap; collect them per gap (skipping hops left straight).
     risers_by_gap: dict[int, list] = defaultdict(list)
-    for idx, hops in hops_by_flow.items():
-        if not _routed_forward(idx):
-            continue
-        if len(chains[idx]) > 2:
-            # Multi-layer spans route through a single lane (below), not per-gap
-            # channels -- skip them here so they don't reserve channel slots.
-            continue
-        for hop in hops:
-            if abs(hop["y1"] - hop["y2"]) >= 1:
-                risers_by_gap[hop["layer"]].append(hop)
+    for idx, hop in hop_by_flow.items():
+        if _routed_hop(idx) and abs(hop["y1"] - hop["y2"]) >= 1:
+            risers_by_gap[hop["layer"]].append(hop)
 
     for lyr, hops in risers_by_gap.items():
         gap_lo = col_x[lyr] + col_w[lyr]
@@ -730,15 +644,15 @@ def _route_edges(positions, ctx, flows, strategy):
         tgt = positions[flows[idx]["target"]]
         return abs((src["x"] + src["w"]) - tgt["x"])
 
-    # Each loop gets its own lane below the diagram; narrower loops take the
-    # shallower lanes so wider loops nest cleanly underneath them.
+    # Each loop (back-edge / same-layer) gets its own lane below the diagram;
+    # narrower loops take the shallower lanes so wider loops nest underneath.
     loop_indices = sorted(
         (
             i
-            for i, hops in hops_by_flow.items()
-            if hops is None
-            and flows[i]["source"] in positions
-            and flows[i]["target"] in positions
+            for i, flow in enumerate(flows)
+            if (_span(flow) is not None and _span(flow) <= 0)
+            and flow["source"] in positions
+            and flow["target"] in positions
         ),
         key=_loop_span,
     )
@@ -761,7 +675,7 @@ def _route_edges(positions, ctx, flows, strategy):
     # Lane per multi-layer span; spans that would share a lane stagger downward so
     # parallel detours never draw on top of one another.
     multilayer_indices = sorted(
-        (i for i in range(len(flows)) if _routed_forward(i) and len(chains[i]) > 2),
+        (i for i, flow in enumerate(flows) if (_span(flow) or 0) >= 2),
         key=_span_base,
     )
     multilayer_lane: dict[int, float] = {}
@@ -773,40 +687,40 @@ def _route_edges(positions, ctx, flows, strategy):
 
     routes: dict[int, list] = {}
     for idx, flow in enumerate(flows):
-        hop_list = hops_by_flow[idx]
-        if hop_list is None:
-            if idx in loop_lane:
-                routes[idx] = _loop_waypoints(
-                    positions[flow["source"]],
-                    positions[flow["target"]],
-                    loop_lane[idx],
-                )
-            else:
-                routes[idx] = []
-        elif _routed_forward(idx):
-            chain = chains[idx]
-            if len(chain) > 2:
-                # Multi-layer span: straighten the whole interior into ONE lane
-                # below the columns it skips -- a single horizontal segment --
-                # instead of threading each dummy's slightly different y (which
-                # rendered as a staircase). Same U geometry as a loop lane.
-                routes[idx] = _loop_waypoints(
-                    positions[flow["source"]],
-                    positions[flow["target"]],
-                    multilayer_lane[idx],
-                )
-            else:
-                points = [(_exit_x(chain[0]), centers[chain[0]][1])]
-                for hop in hop_list:
-                    target_pt = (_entry_x(hop["b"]), hop["y2"])
-                    if abs(hop["y1"] - hop["y2"]) < 1:
-                        points.append(target_pt)
-                    else:
-                        channel = hop["channel"]
-                        points.append((channel, hop["y1"]))
-                        points.append((channel, hop["y2"]))
-                        points.append(target_pt)
-                routes[idx] = points
-        else:
+        span = _span(flow)
+        if span is None:
             routes[idx] = []
+        elif span <= 0:
+            # Loop / same-layer: U through its lane below the diagram.
+            routes[idx] = (
+                _loop_waypoints(
+                    positions[flow["source"]], positions[flow["target"]], loop_lane[idx]
+                )
+                if idx in loop_lane
+                else []
+            )
+        elif span >= 2:
+            # Multi-layer span: U through a lane just below the columns it skips.
+            routes[idx] = _loop_waypoints(
+                positions[flow["source"]],
+                positions[flow["target"]],
+                multilayer_lane[idx],
+            )
+        elif not _routed_hop(idx):
+            routes[idx] = []  # flat adjacent hop, left straight (sparse)
+        else:
+            src, tgt = flow["source"], flow["target"]
+            hop = hop_by_flow[idx]
+            exit_pt = (positions[src]["x"] + positions[src]["w"], centers[src][1])
+            entry_pt = (positions[tgt]["x"], hop["y2"])
+            if abs(hop["y1"] - hop["y2"]) < 1:
+                routes[idx] = [exit_pt, entry_pt]
+            else:
+                channel = hop["channel"]
+                routes[idx] = [
+                    exit_pt,
+                    (channel, hop["y1"]),
+                    (channel, hop["y2"]),
+                    entry_pt,
+                ]
     return routes
