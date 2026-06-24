@@ -1,6 +1,6 @@
 import json
 
-from app.backend.bpmn_writer import json_to_bpmn
+from app.backend.bpmn_writer import laid_out_bpmn, semantic_bpmn
 
 
 class InvalidModelError(ValueError):
@@ -19,20 +19,28 @@ def _decode(raw_response):
         raise InvalidModelError("Connector response is not valid JSON.") from exc
 
 
-def raw_response_to_bpmn(raw_response, include_layout=True):
-    """Turn the connector's reply into BPMN XML: decode -> build.
+def _build(raw_response, build):
+    """Decode the connector's reply and run *build* (a bpmn_writer function).
 
     Graph validity (flows referencing real nodes, reachability, ...) is the
     connector's contract to guarantee and is no longer re-checked here. This
     keeps only a crash-safety net: a malformed model that would otherwise raise
     a ``KeyError`` while building is surfaced as a clean ``invalid_model`` error.
-    ``include_layout=False`` skips diagram layout for the PNML path, which lays
-    out the PNML separately.
     """
     model = _decode(raw_response)
     try:
-        return json_to_bpmn(model, include_layout=include_layout)
+        return build(model)
     except KeyError as exc:
         raise InvalidModelError(
             "Process model could not be built (malformed graph)."
         ) from exc
+
+
+def raw_response_to_bpmn(raw_response):
+    """Connector reply -> BPMN XML with diagram layout."""
+    return _build(raw_response, laid_out_bpmn)
+
+
+def raw_response_to_semantic_bpmn(raw_response):
+    """Connector reply -> geometry-free BPMN XML (input for the PNML path)."""
+    return _build(raw_response, semantic_bpmn)

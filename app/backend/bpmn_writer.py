@@ -176,24 +176,35 @@ def _add_diagram(definitions, model):
             prev = point
 
 
-def json_to_bpmn(model, include_layout=True):
-    """Convert a validated logical process model into BPMN 2.0 XML.
-
-    Builds the semantic process and serializes it. When ``include_layout`` is
-    true it also draws the diagram (shapes and waypoints). The PNML path passes
-    ``include_layout=False``: the transformer ignores BPMN layout and we lay the
-    PNML out separately, so computing a BPMN layout there would be wasted work.
-    """
-    logger.info(
-        "Converting model to BPMN",
-        extra={k: len(model[k]) for k in ("events", "tasks", "gateways", "flows")},
-    )
-    definitions = _build_semantic_process(model)
-    if include_layout:
-        _add_diagram(definitions, model)
-
+def _serialize_bpmn(definitions):
+    """Serialize a BPMN ``<definitions>`` tree to an indented XML string."""
     tree = ET.ElementTree(definitions)
     ET.indent(tree, space="  ", level=0)
     return ET.tostring(definitions, encoding="utf-8", xml_declaration=True).decode(
         "utf-8"
     )
+
+
+def _log_conversion(kind, model):
+    logger.info(
+        f"Converting model to {kind} BPMN",
+        extra={k: len(model[k]) for k in ("events", "tasks", "gateways", "flows")},
+    )
+
+
+def semantic_bpmn(model):
+    """Convert a model into geometry-free BPMN XML (structure only, no diagram).
+
+    Used by the PNML path: the transformer ignores BPMN layout, so drawing one
+    here would be wasted work -- the PNML is laid out separately downstream.
+    """
+    _log_conversion("semantic", model)
+    return _serialize_bpmn(_build_semantic_process(model))
+
+
+def laid_out_bpmn(model):
+    """Convert a model into BPMN XML with diagram interchange (shapes + edges)."""
+    _log_conversion("laid-out", model)
+    definitions = _build_semantic_process(model)
+    _add_diagram(definitions, model)
+    return _serialize_bpmn(definitions)

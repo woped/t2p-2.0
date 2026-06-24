@@ -9,7 +9,11 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api import api_bp
 from app.__init__ import REQUEST_COUNT, REQUEST_LATENCY
-from app.backend.bpmn_builder import InvalidModelError, raw_response_to_bpmn
+from app.backend.bpmn_builder import (
+    InvalidModelError,
+    raw_response_to_bpmn,
+    raw_response_to_semantic_bpmn,
+)
 from app.backend.connector_client import (
     ConnectorClient,
     ConnectorClientError,
@@ -65,14 +69,27 @@ def _removed_api_call_response():
     return response
 
 
-def _generate_bpmn(authorization, text, provider, model, include_layout=True):
-    raw_response = ConnectorClient().generate(
+def _connector_generate(authorization, text, provider, model):
+    return ConnectorClient().generate(
         authorization=authorization,
         user_text=text,
         provider=provider,
         model=model,
     )
-    return raw_response_to_bpmn(raw_response, include_layout=include_layout)
+
+
+def _generate_bpmn(authorization, text, provider, model):
+    """Generate laid-out BPMN XML from a text prompt."""
+    return raw_response_to_bpmn(
+        _connector_generate(authorization, text, provider, model)
+    )
+
+
+def _generate_semantic_bpmn(authorization, text, provider, model):
+    """Generate geometry-free BPMN XML -- the input the PNML path feeds the transformer."""
+    return raw_response_to_semantic_bpmn(
+        _connector_generate(authorization, text, provider, model)
+    )
 
 
 def _transform_to_pnml(bpmn_xml):
@@ -98,14 +115,17 @@ def _legacy_generate(target):
             status = "400"
             return jsonify({"error": f"Missing data for: {', '.join(missing)}"}), 400
 
-        bpmn_xml = _generate_bpmn(
+        gen = dict(
             authorization=f"Bearer {data['api_key']}",
             text=data["text"],
             provider=_LEGACY_PROVIDER,
             model=_LEGACY_MODEL,
-            include_layout=target != "pnml",
         )
-        result = _transform_to_pnml(bpmn_xml) if target == "pnml" else bpmn_xml
+        result = (
+            _transform_to_pnml(_generate_semantic_bpmn(**gen))
+            if target == "pnml"
+            else _generate_bpmn(**gen)
+        )
         return jsonify({"result": result}), 200
     except requests.exceptions.RequestException as exc:
         status = "500"
@@ -209,15 +229,15 @@ def _v2_generate(target):
         if not isinstance(data, dict):
             data = {}
 
-        bpmn_xml = _generate_bpmn(
+        gen = dict(
             authorization=authorization,
             text=data.get("text"),
             provider=data.get("provider"),
             model=data.get("model"),
-            include_layout=target != "pnml",
         )
 
         if target == "pnml":
+            bpmn_xml = _generate_semantic_bpmn(**gen)
             try:
                 result = _transform_to_pnml(bpmn_xml)
             except requests.exceptions.RequestException as e:
@@ -232,7 +252,7 @@ def _v2_generate(target):
                     "The BPMN to PNML transformation service failed.",
                 )
         else:
-            result = bpmn_xml
+            result = _generate_bpmn(**gen)
 
         logger.info("v2 generate completed", extra={"endpoint": endpoint_label})
         return jsonify({"result": result}), 200

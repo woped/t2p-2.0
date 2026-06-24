@@ -1,7 +1,7 @@
 import xml.etree.ElementTree as ET
 
 import pytest
-from app.backend.bpmn_writer import json_to_bpmn
+from app.backend.bpmn_writer import laid_out_bpmn
 from app.backend.pnml_writer import assign_pnml_coordinates
 
 _BPMNDI = "http://www.omg.org/spec/BPMN/20100524/DI"
@@ -50,8 +50,8 @@ def example_data():
     }
 
 
-def test_json_to_bpmn_generates_xml(example_data):
-    result = json_to_bpmn(example_data)
+def test_laid_out_bpmn_generates_xml(example_data):
+    result = laid_out_bpmn(example_data)
 
     # Prüfen, ob der Output ein gültiger XML-String ist
     assert isinstance(result, str)
@@ -64,18 +64,18 @@ def test_json_to_bpmn_generates_xml(example_data):
     assert "<incoming>flow1</incoming>" in result
 
 
-def test_json_to_bpmn_accepts_connector_event_type_names(example_data):
+def test_laid_out_bpmn_accepts_connector_event_type_names(example_data):
     example_data["events"][0]["type"] = "startEvent"
     example_data["events"][1]["type"] = "endEvent"
 
-    result = json_to_bpmn(example_data)
+    result = laid_out_bpmn(example_data)
 
     assert "<startEvent" in result
     assert "<endEvent" in result
     assert "intermediateCatchEvent" not in result
 
 
-def test_json_to_bpmn_with_gateways():
+def test_laid_out_bpmn_with_gateways():
     """Test BPMN generation with gateways"""
     data = {
         "events": [
@@ -108,13 +108,13 @@ def test_json_to_bpmn_with_gateways():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert "gateway1" in result
     assert "ExclusiveGateway" in result or "exclusiveGateway" in result
 
 
-def test_json_to_bpmn_with_multiple_tasks():
+def test_laid_out_bpmn_with_multiple_tasks():
     """Test BPMN generation with multiple tasks"""
     data = {
         "events": [
@@ -155,7 +155,7 @@ def test_json_to_bpmn_with_multiple_tasks():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert "task1" in result
     assert "task2" in result
@@ -165,7 +165,7 @@ def test_json_to_bpmn_with_multiple_tasks():
     assert "Task 3" in result
 
 
-def test_json_to_bpmn_with_parallel_gateway():
+def test_laid_out_bpmn_with_parallel_gateway():
     """Test BPMN generation with parallel gateway"""
     data = {
         "events": [
@@ -196,13 +196,13 @@ def test_json_to_bpmn_with_parallel_gateway():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert "gateway1" in result
     assert "ParallelGateway" in result or "parallelGateway" in result
 
 
-def test_json_to_bpmn_empty_arrays():
+def test_laid_out_bpmn_empty_arrays():
     """Test BPMN generation with minimal data"""
     data = {
         "events": [
@@ -221,7 +221,7 @@ def test_json_to_bpmn_empty_arrays():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert isinstance(result, str)
     assert "<?xml" in result
@@ -256,7 +256,7 @@ def test_cyclic_process_lays_out_every_node_and_flow():
         ],
     }
 
-    root = _parse(json_to_bpmn(data))
+    root = _parse(laid_out_bpmn(data))
     counts = _local_counts(root)
 
     # One shape per node (2 events + 2 tasks) and one edge per flow (4).
@@ -264,7 +264,7 @@ def test_cyclic_process_lays_out_every_node_and_flow():
     assert counts.get("BPMNEdge") == 4
     assert counts.get("sequenceFlow") == 4
     for node_id in ("start", "end", "review", "rework"):
-        assert node_id in json_to_bpmn(data)
+        assert node_id in laid_out_bpmn(data)
 
 
 def test_empty_model_produces_wellformed_empty_diagram():
@@ -275,7 +275,7 @@ def test_empty_model_produces_wellformed_empty_diagram():
     """
     data = {"events": [], "tasks": [], "gateways": [], "flows": []}
 
-    root = _parse(json_to_bpmn(data))
+    root = _parse(laid_out_bpmn(data))
     counts = _local_counts(root)
 
     assert counts.get("process") == 1
@@ -303,7 +303,7 @@ def test_special_characters_in_names_produce_wellformed_xml():
         ],
     }
 
-    root = _parse(json_to_bpmn(data))
+    root = _parse(laid_out_bpmn(data))
 
     names = {el.get("name") for el in root.iter() if el.get("name") is not None}
     assert 'R&D <review> "now"' in names
@@ -326,7 +326,7 @@ def test_unknown_event_type_maps_to_intermediate_catch_event():
         ],
     }
 
-    counts = _local_counts(_parse(json_to_bpmn(data)))
+    counts = _local_counts(_parse(laid_out_bpmn(data)))
     assert counts.get("intermediateCatchEvent") == 1
     assert counts.get("startEvent") == 1
     assert counts.get("endEvent") == 1
