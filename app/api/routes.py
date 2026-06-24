@@ -16,7 +16,7 @@ from app.backend.connector_client import (
     ConnectorError,
 )
 from app.backend.modeltransformer import ModelTransformer
-from app.backend.xml_parser import assign_pnml_coordinates
+from app.backend.pnml_writer import assign_pnml_coordinates
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)

@@ -1,7 +1,8 @@
 import xml.etree.ElementTree as ET
 
 import pytest
-from app.backend.xml_parser import assign_pnml_coordinates, json_to_bpmn
+from app.backend.bpmn_writer import json_to_bpmn
+from app.backend.pnml_writer import assign_pnml_coordinates
 
 _BPMNDI = "http://www.omg.org/spec/BPMN/20100524/DI"
 

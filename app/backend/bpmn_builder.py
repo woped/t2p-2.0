@@ -1,6 +1,6 @@
 import json
 
-from app.backend.xml_parser import json_to_bpmn
+from app.backend.bpmn_writer import json_to_bpmn
 
 
 class InvalidModelError(ValueError):
