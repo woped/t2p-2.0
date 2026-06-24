@@ -377,10 +377,14 @@ def _route_edges(positions, ctx, flows, strategy):
 
     Returns ``{index: [(x, y), ...]}``; each polyline includes its end anchors.
     ``strategy``:
-      * ``"full_ortho"`` -- route every edge orthogonally. Vertical risers live
-        in the gaps between columns (one channel per riser) and edges sharing a
-        split source or join target bundle onto a shared channel.
-      * ``"loops_only"`` -- route only back-edges; forward edges get ``[]``.
+      * ``"full_ortho"`` -- route every edge orthogonally (BPMN's convention).
+        Vertical risers live in the gaps between columns (one channel per riser)
+        and edges sharing a split source or join target bundle onto a shared
+        channel.
+      * ``"sparse"`` -- route only what a straight line cannot draw cleanly:
+        loops and forward edges spanning more than one layer (whose straight line
+        would cut across the columns between). Adjacent-layer edges stay straight
+        (``[]``) -- correct and native for PNML.
     Back-edges always go through their own lane below the diagram, regardless of
     strategy.
     """
@@ -414,18 +418,15 @@ def _route_edges(positions, ctx, flows, strategy):
                 return False
         return True
 
-    # Classify every flow into forward hops (grouped by the gap they cross) or a
-    # loop (back-edge); collect the risers that need a vertical channel.
+    # Classify every flow into a forward hop list or a loop (back-edge -> None).
     hops_by_flow: dict[int, list] = {}
-    risers_by_gap: dict[int, list] = defaultdict(list)
-    for idx, flow in enumerate(flows):
+    for idx in range(len(flows)):
         chain = chains[idx]
         if not _is_regular(chain):
             hops_by_flow[idx] = None
             continue
-        hop_list = []
-        for a, b in zip(chain, chain[1:]):
-            hop = {
+        hops_by_flow[idx] = [
+            {
                 "a": a,
                 "b": b,
                 "layer": node_layer[a],
@@ -433,46 +434,62 @@ def _route_edges(positions, ctx, flows, strategy):
                 "y2": centers[b][1],
                 "channel": None,
             }
-            hop_list.append(hop)
+            for a, b in zip(chain, chain[1:])
+        ]
+
+    def _routed_forward(idx):
+        """Whether forward flow *idx* gets an orthogonal route, vs left straight."""
+        hops = hops_by_flow[idx]
+        if hops is None:
+            return False
+        if strategy == "full_ortho":
+            return True
+        return len(hops) > 1  # "sparse": only multi-layer spans
+
+    # Every height-changing hop of a routed forward edge needs a vertical channel
+    # in its column gap; collect them per gap (skipping edges left straight).
+    risers_by_gap: dict[int, list] = defaultdict(list)
+    for idx, hops in hops_by_flow.items():
+        if not _routed_forward(idx):
+            continue
+        for hop in hops:
             if abs(hop["y1"] - hop["y2"]) >= 1:
-                risers_by_gap[node_layer[a]].append(hop)
-        hops_by_flow[idx] = hop_list
+                risers_by_gap[hop["layer"]].append(hop)
 
-    if strategy == "full_ortho":
-        for lyr, hops in risers_by_gap.items():
-            gap_lo = col_x[lyr] + col_w[lyr]
-            gap_hi = col_x[lyr + 1]
-            # Edges sharing a target (a join) or a source (a split) collapse onto
-            # one shared channel, so they turn at the same x and meet at a single
-            # point instead of stair-stepping. Other hops each get their own.
-            out_count: dict[str, int] = defaultdict(int)
-            in_count: dict[str, int] = defaultdict(int)
-            for hop in hops:
-                out_count[hop["a"]] += 1
-                in_count[hop["b"]] += 1
-            bundles: dict[tuple, list] = {}
-            for hop in hops:
-                if in_count[hop["b"]] > 1:
-                    key = ("in", hop["b"])
-                elif out_count[hop["a"]] > 1:
-                    key = ("out", hop["a"])
-                else:
-                    key = ("single", id(hop))
-                bundles.setdefault(key, []).append(hop)
-            # Lay channels left-to-right: splits near their source, joins near
-            # their target, singletons between; break ties by mean height.
-            kind_rank = {"out": 0, "single": 1, "in": 2}
+    for lyr, hops in risers_by_gap.items():
+        gap_lo = col_x[lyr] + col_w[lyr]
+        gap_hi = col_x[lyr + 1]
+        # Edges sharing a target (a join) or a source (a split) collapse onto one
+        # shared channel, so they turn at the same x and meet at a single point
+        # instead of stair-stepping. Other hops each get their own.
+        out_count: dict[str, int] = defaultdict(int)
+        in_count: dict[str, int] = defaultdict(int)
+        for hop in hops:
+            out_count[hop["a"]] += 1
+            in_count[hop["b"]] += 1
+        bundles: dict[tuple, list] = {}
+        for hop in hops:
+            if in_count[hop["b"]] > 1:
+                key = ("in", hop["b"])
+            elif out_count[hop["a"]] > 1:
+                key = ("out", hop["a"])
+            else:
+                key = ("single", id(hop))
+            bundles.setdefault(key, []).append(hop)
+        # Lay channels left-to-right: splits near their source, joins near their
+        # target, singletons between; break ties by mean height.
+        kind_rank = {"out": 0, "single": 1, "in": 2}
 
-            def _bundle_key(key):
-                ys = [(h["y1"] + h["y2"]) / 2 for h in bundles[key]]
-                return (kind_rank[key[0]], sum(ys) / len(ys))
+        def _bundle_key(key):
+            ys = [(h["y1"] + h["y2"]) / 2 for h in bundles[key]]
+            return (kind_rank[key[0]], sum(ys) / len(ys))
 
-            ordered = sorted(bundles, key=_bundle_key)
-            count = len(ordered)
-            for i, key in enumerate(ordered):
-                channel = gap_lo + (i + 1) * (gap_hi - gap_lo) / (count + 1)
-                for hop in bundles[key]:
-                    hop["channel"] = channel
+        ordered = sorted(bundles, key=_bundle_key)
+        count = len(ordered)
+        for i, key in enumerate(ordered):
+            channel = gap_lo + (i + 1) * (gap_hi - gap_lo) / (count + 1)
+            for hop in bundles[key]:
+                hop["channel"] = channel
 
     bottom_y = max((p["y"] + p["h"] for p in positions.values()), default=0)
 
@@ -507,7 +524,7 @@ def _route_edges(positions, ctx, flows, strategy):
                 )
             else:
                 routes[idx] = []
-        elif strategy == "full_ortho":
+        elif _routed_forward(idx):
             chain = chains[idx]
             points = [(_exit_x(chain[0]), centers[chain[0]][1])]
             for hop in hop_list:

@@ -164,12 +164,11 @@ def assign_pnml_coordinates(pnml_xml):
         position_el.set("x", str(cx))
         position_el.set("y", str(cy))
 
-    # Route every back-edge (rework loop) through its own lane beneath the
-    # diagram, mirroring the BPMN generator. Without explicit bend points each
-    # client auto-routes the loop differently (a straight line back across the
-    # columns), so the rendering is unstable across the fat client and web.
-    # Forward arcs stay waypoint-free (loops_only); edges and routes are aligned.
-    routes = _route_edges(positions, ctx, edges, "loops_only")
+    # Route loops (own lane beneath the diagram) and multi-layer forward arcs
+    # (orthogonally, so they do not cut across the columns between); adjacent-
+    # layer arcs stay straight -- correct and native for PNML, and the client
+    # draws that line itself. Only the interior bend points are written below.
+    routes = _route_edges(positions, ctx, edges, "sparse")
     for idx, edge in enumerate(edges):
         points = routes[idx]
         if not points:
