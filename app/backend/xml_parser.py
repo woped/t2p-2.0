@@ -398,39 +398,6 @@ def assign_pnml_coordinates(pnml_xml):
         position_el.set("x", str(cx))
         position_el.set("y", str(cy))
 
-        # Anonymous nodes (silent/start/end places, operator helper transitions)
-        # carry no <name>, so WoPeD falls back to showing the raw id
-        # ("SILENTFROMxTOy", "startEvent1", ...) as a label -- long, ugly and
-        # overlapping. Give them an empty <name> so they render unlabelled.
-        name_el = elem.find(f"{ns_prefix}name")
-        if name_el is None:
-            name_el = ET.Element(f"{ns_prefix}name")
-            ET.SubElement(name_el, f"{ns_prefix}text").text = ""
-            elem.insert(0, name_el)
-
-        # The transformer marks every UserTask with a WoPeD
-        # <trigger>/<transitionResource> -- that marker is how the reverse
-        # (pnml->bpmn) direction tells a UserTask from a plain Task, so it is
-        # kept even with no role/orga. But an EMPTY marker (no role/orga) is
-        # meaningless to clients, so strip it here.
-        for ts in elem.findall(f"{ns_prefix}toolspecific"):
-            trigger = ts.find(f"{ns_prefix}trigger")
-            resource = ts.find(f"{ns_prefix}transitionResource")
-            resource_empty = resource is not None and not (
-                resource.get("roleName") or resource.get("organizationalUnitName")
-            )
-            if trigger is not None and trigger.get("type") == "200" and resource_empty:
-                ts.remove(trigger)
-                ts.remove(resource)
-            # A <toolspecific> left with nothing meaningful (e.g. a UserTask whose
-            # empty resource marker was just removed) carries no information --
-            # drop it so plain transitions stay clean.
-            if not any(
-                ts.find(f"{ns_prefix}{tag}") is not None
-                for tag in ("operator", "trigger", "transitionResource", "subprocess")
-            ):
-                elem.remove(ts)
-
     # Route every back-edge (rework loop) through its own lane beneath the
     # diagram, mirroring the BPMN generator. Without explicit bend points each
     # client auto-routes the loop differently (a straight line back across the
@@ -445,15 +412,58 @@ def assign_pnml_coordinates(pnml_xml):
         # itself; only the interior U-bend points are stored as bend points.
         _set_arc_waypoints(arc, points[1:-1], ns_prefix)
 
-    # Strip empty id="" attributes: the transformer's pydantic-xml models give
-    # every element a default empty id, so <name>/<toolspecific>/<offset>/...
-    # carry a meaningless id="". Real node/arc ids are never empty.
-    for el in root.iter():
-        if el.get("id") == "":
-            del el.attrib["id"]
+    # Tidy the PNML for clients (empty labels, empty markers, id="" noise).
+    # Independent of layout, so kept out of the layout steps above.
+    _clean_pnml(root, ns_prefix)
 
     ET.indent(ET.ElementTree(root), space="  ", level=0)
     return ET.tostring(root, encoding="unicode")
+
+
+def _clean_pnml(root, ns_prefix):
+    """Tidy the transformer's PNML for clients, independent of layout.
+
+    Three client-facing fixes that are not geometry:
+
+    * Anonymous nodes (silent/start/end places, operator helper transitions)
+      carry no ``<name>``, so WoPeD would show the raw id ("SILENTFROMxTOy",
+      ...) as a label. Give them an empty ``<name>`` so they render unlabelled.
+    * The transformer marks every UserTask with a WoPeD
+      ``<trigger>``/``<transitionResource>`` -- that marker is how the reverse
+      (pnml->bpmn) direction tells a UserTask from a plain Task, so it is kept
+      even with no role/orga. An EMPTY marker is meaningless to clients, so it
+      (and any ``<toolspecific>`` left empty by it) is dropped.
+    * pydantic-xml gives every element a default empty ``id=""``; real node/arc
+      ids are never empty, so the noise ids are stripped.
+    """
+    nodes = list(root.iter(f"{ns_prefix}place")) + list(
+        root.iter(f"{ns_prefix}transition")
+    )
+    for elem in nodes:
+        name_el = elem.find(f"{ns_prefix}name")
+        if name_el is None:
+            name_el = ET.Element(f"{ns_prefix}name")
+            ET.SubElement(name_el, f"{ns_prefix}text").text = ""
+            elem.insert(0, name_el)
+
+        for ts in elem.findall(f"{ns_prefix}toolspecific"):
+            trigger = ts.find(f"{ns_prefix}trigger")
+            resource = ts.find(f"{ns_prefix}transitionResource")
+            resource_empty = resource is not None and not (
+                resource.get("roleName") or resource.get("organizationalUnitName")
+            )
+            if trigger is not None and trigger.get("type") == "200" and resource_empty:
+                ts.remove(trigger)
+                ts.remove(resource)
+            if not any(
+                ts.find(f"{ns_prefix}{tag}") is not None
+                for tag in ("operator", "trigger", "transitionResource", "subprocess")
+            ):
+                elem.remove(ts)
+
+    for el in root.iter():
+        if el.get("id") == "":
+            del el.attrib["id"]
 
 
 def _build_semantic_process(model):
