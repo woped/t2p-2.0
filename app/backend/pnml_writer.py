@@ -40,51 +40,59 @@ def _set_arc_waypoints(arc_el, points, ns_prefix):
         )
 
 
-def _label_width(elem, ns_prefix):
-    """Estimate the rendered width (px) of a node's label from ``<name><text>``.
-
-    WoPeD draws the name centred below the node, so a long name needs a wider
-    column than the node box to keep it from overlapping its neighbours.
-    Returns 0 for unnamed nodes (e.g. silent places).
-    """
+def _label_text(elem, ns_prefix):
+    """Return the node's label from ``<name><text>``, or '' if it is unnamed."""
     name = elem.find(f"{ns_prefix}name")
     text = name.find(f"{ns_prefix}text") if name is not None else None
-    if text is None or not text.text:
-        return 0
-    return len(text.text.strip()) * _LABEL_CHAR_PX
+    return text.text if (text is not None and text.text) else ""
 
 
 def _extract_graph(root, ns_prefix):
-    """Read the layout graph from the PNML tree.
+    """Read the raw graph from the PNML tree -- no geometry.
 
-    Walks the whole tree (so nested ``<pnml><net><page>...`` hierarchies are
-    handled). Returns ``(elements_by_id, flows, handles, arcs)``: node sizes
-    keyed by id (each widened for its label so neighbours do not overlap), the
-    arcs as ``{source, target}`` flows, a map id -> node element to write
-    coordinates back inline, and the raw ``(arc_el, source, target)`` triples for
-    waypoints.
+    Walks the whole tree (nested ``<pnml><net><page>...`` hierarchies included).
+    Returns ``(nodes, edges)``: nodes as ``{id, kind, label, element}`` (kind is
+    ``"place"`` or ``"transition"``), edges as ``{source, target, element}``.
     """
-    elements_by_id: dict[str, dict] = {}
-    handles: dict[str, ET.Element] = {}
-    for place in root.iter(f"{ns_prefix}place"):
-        pid = place.get("id")
-        if pid:
-            w = max(_PNML_PLACE_W, _label_width(place, ns_prefix))
-            elements_by_id[pid] = {"w": w, "h": _PNML_PLACE_H}
-            handles[pid] = place
-    for trans in root.iter(f"{ns_prefix}transition"):
-        tid = trans.get("id")
-        if tid:
-            w = max(_PNML_TRANS_W, _label_width(trans, ns_prefix))
-            elements_by_id[tid] = {"w": w, "h": _PNML_TRANS_H}
-            handles[tid] = trans
-    arcs = [
-        (arc, arc.get("source"), arc.get("target"))
+    nodes: list[dict] = []
+    for kind in ("place", "transition"):
+        for el in root.iter(f"{ns_prefix}{kind}"):
+            nid = el.get("id")
+            if nid:
+                nodes.append(
+                    {
+                        "id": nid,
+                        "kind": kind,
+                        "label": _label_text(el, ns_prefix),
+                        "element": el,
+                    }
+                )
+    edges = [
+        {"source": arc.get("source"), "target": arc.get("target"), "element": arc}
         for arc in root.iter(f"{ns_prefix}arc")
         if arc.get("source") and arc.get("target")
     ]
-    flows = [{"source": src, "target": tgt} for _, src, tgt in arcs]
-    return elements_by_id, flows, handles, arcs
+    return nodes, edges
+
+
+_PNML_BASE = {
+    "place": (_PNML_PLACE_W, _PNML_PLACE_H),
+    "transition": (_PNML_TRANS_W, _PNML_TRANS_H),
+}
+
+
+def _node_sizes(nodes):
+    """Assign each node a layout box ``{w, h}``: base size by kind, widened to fit
+    the label so a long name does not overlap (WoPeD draws it below the node).
+    """
+    sizes: dict[str, dict] = {}
+    for n in nodes:
+        base_w, base_h = _PNML_BASE[n["kind"]]
+        sizes[n["id"]] = {
+            "w": max(base_w, len(n["label"].strip()) * _LABEL_CHAR_PX),
+            "h": base_h,
+        }
+    return sizes
 
 
 def assign_pnml_coordinates(pnml_xml):
@@ -127,18 +135,18 @@ def assign_pnml_coordinates(pnml_xml):
     if ns_prefix:
         ET.register_namespace("", ns_prefix[1:-1])
 
-    elements_by_id, flows, elem_xml_map, arcs = _extract_graph(root, ns_prefix)
-    if not elements_by_id:
+    nodes, edges = _extract_graph(root, ns_prefix)
+    if not nodes:
         return pnml_xml  # nothing to lay out
 
+    elements_by_id = _node_sizes(nodes)
     positions, ctx = _sugiyama_layout(
-        elements_by_id, flows, h_gap=80, v_gap=50, x_offset=100, y_offset=100
+        elements_by_id, edges, h_gap=80, v_gap=50, x_offset=100, y_offset=100
     )
 
-    for nid, pos in positions.items():
-        elem = elem_xml_map.get(nid)
-        if elem is None:
-            continue
+    for node in nodes:
+        elem = node["element"]
+        pos = positions[node["id"]]
 
         # PNML <position> stores centre coordinates.
         cx = pos["x"] + pos["w"] // 2
@@ -158,15 +166,15 @@ def assign_pnml_coordinates(pnml_xml):
     # diagram, mirroring the BPMN generator. Without explicit bend points each
     # client auto-routes the loop differently (a straight line back across the
     # columns), so the rendering is unstable across the fat client and web.
-    # Forward arcs stay waypoint-free (loops_only); arcs and flows are aligned.
-    routes = _route_edges(positions, ctx, flows, "loops_only")
-    for idx, (arc, _src, _tgt) in enumerate(arcs):
+    # Forward arcs stay waypoint-free (loops_only); edges and routes are aligned.
+    routes = _route_edges(positions, ctx, edges, "loops_only")
+    for idx, edge in enumerate(edges):
         points = routes[idx]
         if not points:
             continue
         # Drop the first/last point: those are the node anchors WoPeD derives
         # itself; only the interior U-bend points are stored as bend points.
-        _set_arc_waypoints(arc, points[1:-1], ns_prefix)
+        _set_arc_waypoints(edge["element"], points[1:-1], ns_prefix)
 
     # Tidy the PNML for clients (empty labels, empty markers, id="" noise).
     # Independent of layout, so kept out of the layout steps above.

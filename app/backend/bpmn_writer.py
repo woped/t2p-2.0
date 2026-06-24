@@ -112,21 +112,19 @@ def _bpmn_node_size(tag):
 
 
 def _extract_graph(process):
-    """Read the layout graph from the semantic ``<process>`` tree.
+    """Read the raw graph from the semantic ``<process>`` tree -- no geometry.
 
-    Returns ``(elements_by_id, flows, node_ids)``: node sizes keyed by id, the
-    sequence flows as ``{source, target, id}``, and the node ids in document
-    order. The geometry-free tree the diagram decorates is the single source of
-    truth -- node size follows the element's tag, the model is not re-read.
+    The tree the diagram decorates is the single source of truth (the model is
+    not re-read). Returns ``(nodes, edges)``: nodes as ``{id, tag}`` in document
+    order, edges (sequence flows) as ``{source, target, id}``.
     """
     ns = f"{{{_NS['bpmn']}}}"
-    elements_by_id: dict[str, dict] = {}
-    node_ids: list[str] = []
-    flows: list[dict] = []
+    nodes: list[dict] = []
+    edges: list[dict] = []
     for child in process:
         tag = child.tag[len(ns) :] if child.tag.startswith(ns) else child.tag
         if tag == "sequenceFlow":
-            flows.append(
+            edges.append(
                 {
                     "source": child.get("sourceRef"),
                     "target": child.get("targetRef"),
@@ -134,10 +132,13 @@ def _extract_graph(process):
                 }
             )
         else:
-            nid = child.get("id")
-            elements_by_id[nid] = _bpmn_node_size(tag)
-            node_ids.append(nid)
-    return elements_by_id, flows, node_ids
+            nodes.append({"id": child.get("id"), "tag": tag})
+    return nodes, edges
+
+
+def _node_sizes(nodes):
+    """Assign a layout box ``{w, h}`` to each node by its BPMN kind (tag)."""
+    return {n["id"]: _bpmn_node_size(n["tag"]) for n in nodes}
 
 
 def _add_diagram(definitions):
@@ -149,7 +150,8 @@ def _add_diagram(definitions):
     guarantees every node and flow endpoint exists.
     """
     process = definitions.find(f"{{{_NS['bpmn']}}}process")
-    elements_by_id, flows, node_ids = _extract_graph(process)
+    nodes, edges = _extract_graph(process)
+    elements_by_id = _node_sizes(nodes)
 
     bpmn_di = ET.SubElement(
         definitions, f"{{{_NS['bpmndi']}}}BPMNDiagram", attrib={"id": "BPMNDiagram_1"}
@@ -161,10 +163,11 @@ def _add_diagram(definitions):
     )
 
     positions, ctx = _sugiyama_layout(
-        elements_by_id, flows, h_gap=180, v_gap=90, x_offset=50, y_offset=50
+        elements_by_id, edges, h_gap=180, v_gap=90, x_offset=50, y_offset=50
     )
 
-    for nid in node_ids:
+    for node in nodes:
+        nid = node["id"]
         bpmn_shape = ET.SubElement(
             bpmn_plane,
             f"{{{_NS['bpmndi']}}}BPMNShape",
@@ -182,15 +185,15 @@ def _add_diagram(definitions):
             },
         )
 
-    if not flows:
+    if not edges:
         return
 
-    routes = _route_edges(positions, ctx, flows, "full_ortho")
-    for idx, flow in enumerate(flows):
+    routes = _route_edges(positions, ctx, edges, "full_ortho")
+    for idx, edge in enumerate(edges):
         bpmn_edge = ET.SubElement(
             bpmn_plane,
             f"{{{_NS['bpmndi']}}}BPMNEdge",
-            attrib={"id": f"{flow['id']}_di", "bpmnElement": flow["id"]},
+            attrib={"id": f"{edge['id']}_di", "bpmnElement": edge["id"]},
         )
         prev = None
         for px, py in routes[idx]:
