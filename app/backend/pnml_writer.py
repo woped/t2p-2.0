@@ -177,12 +177,42 @@ def assign_pnml_coordinates(pnml_xml):
         # itself; only the interior U-bend points are stored as bend points.
         _set_arc_waypoints(edge["element"], points[1:-1], ns_prefix)
 
+    # Put one token in the source place so the output is a complete workflow net
+    # (van der Aalst: one token in the unique source) that WoPeD can play/analyse.
+    _set_initial_marking(nodes, edges, ns_prefix)
+
     # Strip transformer noise (empty resource markers, id="" defaults) for a
     # cleaner standard net. Independent of layout, kept out of the steps above.
     _clean_pnml(root, ns_prefix)
 
     ET.indent(ET.ElementTree(root), space="  ", level=0)
     return ET.tostring(root, encoding="unicode")
+
+
+def _set_initial_marking(nodes, edges, ns_prefix):
+    """Put one token in the source place (no incoming arc).
+
+    A workflow net is defined with a single token in its unique source place; a
+    net without it is structurally complete but "not started", so WoPeD cannot
+    play the token game or run soundness on it. Only marked when there is exactly
+    one source -- a malformed multi-source net is left alone rather than guessed.
+    """
+    targets = {e["target"] for e in edges}
+    sources = [
+        n["element"]
+        for n in nodes
+        if n["element"].tag.rpartition("}")[2] == "place" and n["id"] not in targets
+    ]
+    if len(sources) != 1:
+        return
+    place = sources[0]
+    marking = place.find(f"{ns_prefix}initialMarking")
+    if marking is None:
+        marking = ET.SubElement(place, f"{ns_prefix}initialMarking")
+    text = marking.find(f"{ns_prefix}text")
+    if text is None:
+        text = ET.SubElement(marking, f"{ns_prefix}text")
+    text.text = "1"
 
 
 def _clean_pnml(root, ns_prefix):
