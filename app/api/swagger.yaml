@@ -6,10 +6,12 @@ info:
     `/v2` namespace. Existing unversioned generation endpoints remain
     functional during their deprecation period; clients should migrate to
     `/v2`. The previously deprecated `/api_call` endpoint has been removed.
-  version: 2.1.0
+  version: 2.2.0
   contact:
     name: API Support
 servers:
+  - url: https://woped.dhbw-karlsruhe.de/t2p-2.0
+    description: Production (behind the Apache reverse proxy)
   - url: http://localhost:5000
     description: Local development server
 

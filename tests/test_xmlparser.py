@@ -1,7 +1,8 @@
 import xml.etree.ElementTree as ET
 
 import pytest
-from app.backend.xml_parser import assign_pnml_coordinates, json_to_bpmn
+from app.backend.bpmn_writer import laid_out_bpmn, semantic_bpmn
+from app.backend.pnml_writer import assign_pnml_coordinates
 
 _BPMNDI = "http://www.omg.org/spec/BPMN/20100524/DI"
 
@@ -49,8 +50,8 @@ def example_data():
     }
 
 
-def test_json_to_bpmn_generates_xml(example_data):
-    result = json_to_bpmn(example_data)
+def test_laid_out_bpmn_generates_xml(example_data):
+    result = laid_out_bpmn(example_data)
 
     # Prüfen, ob der Output ein gültiger XML-String ist
     assert isinstance(result, str)
@@ -59,20 +60,31 @@ def test_json_to_bpmn_generates_xml(example_data):
     assert "startEvent1" in result
     assert "task1" in result
     assert "endEvent1" in result
+    # <incoming>/<outgoing> are transformer-only and must NOT be in client BPMN.
+    assert "<outgoing>" not in result
+    assert "<incoming>" not in result
 
 
-def test_json_to_bpmn_accepts_connector_event_type_names(example_data):
+def test_semantic_bpmn_keeps_flow_references(example_data):
+    # The transformer reads node in/out degree from <incoming>/<outgoing>, so the
+    # semantic (transformer-feeding) BPMN keeps them -- unlike laid_out_bpmn.
+    result = semantic_bpmn(example_data)
+    assert "<outgoing>flow1</outgoing>" in result
+    assert "<incoming>flow1</incoming>" in result
+
+
+def test_laid_out_bpmn_accepts_connector_event_type_names(example_data):
     example_data["events"][0]["type"] = "startEvent"
     example_data["events"][1]["type"] = "endEvent"
 
-    result = json_to_bpmn(example_data)
+    result = laid_out_bpmn(example_data)
 
     assert "<startEvent" in result
     assert "<endEvent" in result
     assert "intermediateCatchEvent" not in result
 
 
-def test_json_to_bpmn_with_gateways():
+def test_laid_out_bpmn_with_gateways():
     """Test BPMN generation with gateways"""
     data = {
         "events": [
@@ -105,13 +117,13 @@ def test_json_to_bpmn_with_gateways():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert "gateway1" in result
     assert "ExclusiveGateway" in result or "exclusiveGateway" in result
 
 
-def test_json_to_bpmn_with_multiple_tasks():
+def test_laid_out_bpmn_with_multiple_tasks():
     """Test BPMN generation with multiple tasks"""
     data = {
         "events": [
@@ -152,7 +164,7 @@ def test_json_to_bpmn_with_multiple_tasks():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert "task1" in result
     assert "task2" in result
@@ -162,7 +174,7 @@ def test_json_to_bpmn_with_multiple_tasks():
     assert "Task 3" in result
 
 
-def test_json_to_bpmn_with_parallel_gateway():
+def test_laid_out_bpmn_with_parallel_gateway():
     """Test BPMN generation with parallel gateway"""
     data = {
         "events": [
@@ -193,13 +205,46 @@ def test_json_to_bpmn_with_parallel_gateway():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert "gateway1" in result
     assert "ParallelGateway" in result or "parallelGateway" in result
 
 
-def test_json_to_bpmn_empty_arrays():
+def test_exclusive_gateway_shape_marks_marker_visible():
+    """The XOR marker is optional in BPMN -- bpmn-js only draws the X when the
+    shape carries isMarkerVisible="true". Parallel gateways always show their +,
+    so the flag must be set for exclusive gateways (and only those) to keep XOR
+    and AND visually distinct."""
+    data = {
+        "events": [
+            {"id": "start1", "type": "Start", "name": "Start"},
+            {"id": "end1", "type": "End", "name": "End"},
+        ],
+        "tasks": [{"id": "task1", "name": "Task 1", "type": "UserTask"}],
+        "gateways": [
+            {"id": "xor1", "type": "ExclusiveGateway", "name": "Decision"},
+            {"id": "and1", "type": "ParallelGateway", "name": "Split"},
+        ],
+        "flows": [
+            {"id": "f1", "source": "start1", "target": "xor1", "type": "SequenceFlow"},
+            {"id": "f2", "source": "xor1", "target": "and1", "type": "SequenceFlow"},
+            {"id": "f3", "source": "and1", "target": "task1", "type": "SequenceFlow"},
+            {"id": "f4", "source": "task1", "target": "end1", "type": "SequenceFlow"},
+        ],
+    }
+
+    root = _parse(laid_out_bpmn(data))
+    marker_by_element = {
+        shape.get("bpmnElement"): shape.get("isMarkerVisible")
+        for shape in root.iter(f"{{{_BPMNDI}}}BPMNShape")
+    }
+
+    assert marker_by_element["xor1"] == "true"
+    assert marker_by_element["and1"] is None
+
+
+def test_laid_out_bpmn_empty_arrays():
     """Test BPMN generation with minimal data"""
     data = {
         "events": [
@@ -218,7 +263,7 @@ def test_json_to_bpmn_empty_arrays():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert isinstance(result, str)
     assert "<?xml" in result
@@ -253,7 +298,7 @@ def test_cyclic_process_lays_out_every_node_and_flow():
         ],
     }
 
-    root = _parse(json_to_bpmn(data))
+    root = _parse(laid_out_bpmn(data))
     counts = _local_counts(root)
 
     # One shape per node (2 events + 2 tasks) and one edge per flow (4).
@@ -261,7 +306,7 @@ def test_cyclic_process_lays_out_every_node_and_flow():
     assert counts.get("BPMNEdge") == 4
     assert counts.get("sequenceFlow") == 4
     for node_id in ("start", "end", "review", "rework"):
-        assert node_id in json_to_bpmn(data)
+        assert node_id in laid_out_bpmn(data)
 
 
 def test_empty_model_produces_wellformed_empty_diagram():
@@ -272,7 +317,7 @@ def test_empty_model_produces_wellformed_empty_diagram():
     """
     data = {"events": [], "tasks": [], "gateways": [], "flows": []}
 
-    root = _parse(json_to_bpmn(data))
+    root = _parse(laid_out_bpmn(data))
     counts = _local_counts(root)
 
     assert counts.get("process") == 1
@@ -300,7 +345,7 @@ def test_special_characters_in_names_produce_wellformed_xml():
         ],
     }
 
-    root = _parse(json_to_bpmn(data))
+    root = _parse(laid_out_bpmn(data))
 
     names = {el.get("name") for el in root.iter() if el.get("name") is not None}
     assert 'R&D <review> "now"' in names
@@ -323,7 +368,7 @@ def test_unknown_event_type_maps_to_intermediate_catch_event():
         ],
     }
 
-    counts = _local_counts(_parse(json_to_bpmn(data)))
+    counts = _local_counts(_parse(laid_out_bpmn(data)))
     assert counts.get("intermediateCatchEvent") == 1
     assert counts.get("startEvent") == 1
     assert counts.get("endEvent") == 1
@@ -354,8 +399,81 @@ def test_assign_pnml_coordinates_lays_out_each_node():
 
     # Every node is positioned, and the layered layout spreads them out
     # (not all stacked on the same placeholder coordinate).
-    assert set(coords) == {"P1", "t1", "P2"}
+    assert set(coords) == {"p1", "t1", "p2"}
     assert len(set(coords.values())) == 3
+
+
+def test_assign_pnml_coordinates_routes_back_edge_loops():
+    """A back-edge (rework loop) must get explicit arc bend points so every
+    client renders the loop the same way instead of auto-routing it.
+
+    Only the loop-closing arc is routed; the forward arcs stay waypoint-free
+    (short, ~horizontal hops the client can route itself)."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p1'/>"
+        "<transition id='review'/>"
+        "<place id='p2'/>"
+        "<transition id='rework'/>"
+        "<arc id='a1' source='p1' target='review'/>"
+        "<arc id='a2' source='review' target='p2'/>"
+        "<arc id='a3' source='p2' target='rework'/>"
+        "<arc id='a4' source='rework' target='review'/>"  # back-edge (loop)
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+
+    waypoints = {}
+    for arc in root.iter():
+        if arc.tag.split("}")[-1] == "arc":
+            positions = arc.findall("graphics/position")
+            waypoints[arc.get("id")] = positions
+
+    # The back-edge is routed with interior bend points; forward arcs are not.
+    assert len(waypoints["a4"]) >= 2, "loop arc got no bend points"
+    assert all(len(waypoints[fwd]) == 0 for fwd in ("a1", "a2", "a3"))
+
+    # The loop's bend points dip into a lane below the lowest node.
+    bottom_y = max(
+        int(pos.get("y"))
+        for node in root.iter()
+        if node.tag.split("}")[-1] in ("place", "transition")
+        for pos in [node.find("graphics/position")]
+        if pos is not None
+    )
+    assert any(int(p.get("y")) > bottom_y for p in waypoints["a4"])
+
+
+def test_assign_pnml_coordinates_straightens_multi_layer_arc():
+    """A multi-layer (skip) arc must route through ONE horizontal lane, not a
+    staircase of per-dummy bend points. The interior is a single flat segment."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p0'/><transition id='t0'/><place id='p1'/><transition id='t1'/>"
+        "<place id='p2'/><transition id='t2'/><place id='p3'/>"
+        "<arc id='a0' source='p0' target='t0'/><arc id='a1' source='t0' target='p1'/>"
+        "<arc id='a2' source='p1' target='t1'/><arc id='a3' source='t1' target='p2'/>"
+        "<arc id='a4' source='p2' target='t2'/><arc id='a5' source='t2' target='p3'/>"
+        "<arc id='askip' source='p0' target='p3'/>"  # spans 6 layers
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+    skip = next(a for a in root.iter() if a.get("id") == "askip")
+    pts = [
+        (int(p.get("x")), int(p.get("y"))) for p in skip.findall("graphics/position")
+    ]
+
+    # No staircase: a clean U has few points, and the horizontal run sits at a
+    # single y (the lane) rather than drifting through every dummy's height.
+    assert len(pts) <= 4, f"expected a flat lane, got a staircase: {pts}"
+    lane_ys = sorted({y for _, y in pts})
+    assert len(lane_ys) <= 3, f"too many distinct heights for a U: {pts}"
+    # The two deepest points (the lane) share one y and span the width.
+    deepest = max(y for _, y in pts)
+    lane_pts = [x for x, y in pts if y == deepest]
+    assert len(lane_pts) >= 2 and max(lane_pts) - min(lane_pts) > 0
 
 
 def test_assign_pnml_coordinates_passes_through_non_xml():
@@ -363,43 +481,49 @@ def test_assign_pnml_coordinates_passes_through_non_xml():
     assert assign_pnml_coordinates("not xml") == "not xml"
 
 
-def test_assign_pnml_coordinates_renames_places_and_normalizes_transition_labels():
-    """PNML post-processing renames places to Pn and strips task-type label
-    prefixes from transitions."""
+def test_assign_pnml_coordinates_handles_clean_transformer_output():
+    """Grounding test for the current (geometry-free) transformer output: nodes
+    carry no <graphics>, toolspecific blocks hold only semantic markers, and
+    pydantic-xml leaves a default id="" on nested elements. The post-step must
+    position every node, strip the noise id="", and preserve the semantic
+    operator/trigger/resource markers untouched."""
     pnml = (
-        "<pnml><net id='n1'>"
-        "<place id='startEvent1'/>"
-        "<transition id='task1'><name><text>[UserTask] Receive Bike and Deposit</text></name></transition>"
-        "<place id='SILENTFROMtask1TOtask2'/>"
-        "<transition id='task2'><name><text>[ServiceTask] Perform Repairs</text></name></transition>"
-        "<arc id='a1' source='startEvent1' target='task1'/>"
-        "<arc id='a2' source='task1' target='SILENTFROMtask1TOtask2'/>"
-        "<arc id='a3' source='SILENTFROMtask1TOtask2' target='task2'/>"
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p1'/>"
+        "<transition id='t1'>"
+        "<name id=''><text>Do work</text></name>"
+        "<toolspecific id='' tool='WoPeD' version='1.0'>"
+        "<operator id='' type='102'/>"
+        "</toolspecific>"
+        "</transition>"
+        "<transition id='t2'>"
+        "<toolspecific id='' tool='WoPeD' version='1.0'>"
+        "<trigger id='' type='200'/>"
+        "<transitionResource id='' roleName='clerk' organizationalUnitName='office'/>"
+        "</toolspecific>"
+        "</transition>"
+        "<place id='p2'/>"
+        "<arc id='a1' source='p1' target='t1'/>"
+        "<arc id='a2' source='t1' target='p2'/>"
+        "<arc id='a3' source='p2' target='t2'/>"
         "</net></pnml>"
     )
 
     root = ET.fromstring(assign_pnml_coordinates(pnml))
 
-    place_ids = [
-        node.get("id")
-        for node in root.iter()
-        if node.tag.split("}")[-1] == "place"
-    ]
-    assert place_ids == ["P1", "P2"]
+    # Every node is positioned.
+    for node in root.iter():
+        if node.tag.split("}")[-1] in ("place", "transition"):
+            assert node.find("graphics/position") is not None
 
-    transitions = {
-        node.get("id"): node.find("name/text").text
-        for node in root.iter()
-        if node.tag.split("}")[-1] == "transition"
+    # The noise id="" is stripped everywhere; real ids survive.
+    assert all(el.get("id") != "" for el in root.iter())
+    assert {"p1", "t1", "t2", "p2"} <= {
+        el.get("id") for el in root.iter() if el.get("id")
     }
-    assert transitions["task1"] == "receive bike and deposit"
-    assert transitions["task2"] == "perform repairs"
 
-    arcs = [
-        (arc.get("source"), arc.get("target"))
-        for arc in root.iter()
-        if arc.tag.split("}")[-1] == "arc"
-    ]
-    assert ("P1", "task1") in arcs
-    assert ("task1", "P2") in arcs
-    assert ("P2", "task2") in arcs
+    # Semantic workflow markers are preserved untouched.
+    operator = root.find(".//toolspecific/operator")
+    assert operator is not None and operator.get("type") == "102"
+    resource = root.find(".//toolspecific/transitionResource")
+    assert resource is not None and resource.get("roleName") == "clerk"

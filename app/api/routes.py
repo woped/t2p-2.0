@@ -10,14 +10,18 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api import api_bp
 from app.__init__ import REQUEST_COUNT, REQUEST_LATENCY
-from app.backend.bpmn_builder import InvalidModelError, raw_response_to_bpmn
+from app.backend.bpmn_builder import (
+    InvalidModelError,
+    raw_response_to_bpmn,
+    raw_response_to_semantic_bpmn,
+)
 from app.backend.connector_client import (
     ConnectorClient,
     ConnectorClientError,
     ConnectorError,
 )
 from app.backend.modeltransformer import ModelTransformer
-from app.backend.xml_parser import assign_pnml_coordinates
+from app.backend.pnml_writer import assign_pnml_coordinates
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
@@ -66,23 +70,35 @@ def _removed_api_call_response():
     return response
 
 
-def _generate_bpmn(authorization, text, provider, model, prompting_strategy=None):
-    raw_response = ConnectorClient().generate(
+def _connector_generate(authorization, text, provider, model, prompting_strategy=None):
+    return ConnectorClient().generate(
         authorization=authorization,
         user_text=text,
         provider=provider,
         model=model,
         prompting_strategy=prompting_strategy,
     )
-    return raw_response_to_bpmn(raw_response)
+
+
+def _generate_bpmn(authorization, text, provider, model, prompting_strategy=None):
+    """Generate laid-out BPMN XML from a text prompt."""
+    return raw_response_to_bpmn(
+        _connector_generate(authorization, text, provider, model, prompting_strategy)
+    )
+
+
+def _generate_semantic_bpmn(
+    authorization, text, provider, model, prompting_strategy=None
+):
+    """Generate geometry-free BPMN XML -- the input the PNML path feeds the transformer."""
+    return raw_response_to_semantic_bpmn(
+        _connector_generate(authorization, text, provider, model, prompting_strategy)
+    )
 
 
 def _transform_to_pnml(bpmn_xml):
-    # The incoming BPMN already carries a layout, but the transformer discards
-    # it and we recompute coordinates on the PNML below. That double layout is
-    # intentional: both paths reuse the same BPMN builder, and the cost is
-    # negligible next to the LLM call and transformer round-trip. Avoiding it
-    # would mean emitting layout-free BPMN, which the transformer may reject.
+    # The transformer ignores BPMN layout, so the PNML path builds layout-free
+    # BPMN (see _generate_bpmn callers). We lay out the PNML once, here.
     pnml_xml = ModelTransformer().transform(bpmn_xml, {"direction": "bpmntopnml"})
     return assign_pnml_coordinates(pnml_xml)
 
@@ -103,13 +119,17 @@ def _legacy_generate(target):
             status = "400"
             return jsonify({"error": f"Missing data for: {', '.join(missing)}"}), 400
 
-        bpmn_xml = _generate_bpmn(
+        gen = dict(
             authorization=f"Bearer {data['api_key']}",
             text=data["text"],
             provider=_LEGACY_PROVIDER,
             model=_LEGACY_MODEL,
         )
-        result = _transform_to_pnml(bpmn_xml) if target == "pnml" else bpmn_xml
+        result = (
+            _transform_to_pnml(_generate_semantic_bpmn(**gen))
+            if target == "pnml"
+            else _generate_bpmn(**gen)
+        )
         return jsonify({"result": result}), 200
     except requests.exceptions.RequestException as exc:
         status = "500"
@@ -213,7 +233,7 @@ def _v2_generate(target):
         if not isinstance(data, dict):
             data = {}
 
-        bpmn_xml = _generate_bpmn(
+        gen = dict(
             authorization=authorization,
             text=data.get("text"),
             provider=data.get("provider"),
@@ -222,6 +242,7 @@ def _v2_generate(target):
         )
 
         if target == "pnml":
+            bpmn_xml = _generate_semantic_bpmn(**gen)
             try:
                 result = _transform_to_pnml(bpmn_xml)
             except requests.exceptions.RequestException as e:
@@ -236,7 +257,7 @@ def _v2_generate(target):
                     "The BPMN to PNML transformation service failed.",
                 )
         else:
-            result = bpmn_xml
+            result = _generate_bpmn(**gen)
 
         logger.info("v2 generate completed", extra={"endpoint": endpoint_label})
         return jsonify({"result": result}), 200

@@ -1,9 +1,6 @@
 import json
 
-from app.backend.xml_parser import json_to_bpmn
-
-# Element groups that carry id/type/name entries (everything except flows).
-_NODE_GROUPS = ("events", "tasks", "gateways")
+from app.backend.bpmn_writer import laid_out_bpmn, semantic_bpmn
 
 
 class InvalidModelError(ValueError):
@@ -22,30 +19,28 @@ def _decode(raw_response):
         raise InvalidModelError("Connector response is not valid JSON.") from exc
 
 
-def _verify(model):
-    """Catch the one inconsistency the connector's schema cannot express.
+def _build(raw_response, build):
+    """Decode the connector's reply and run *build* (a bpmn_writer function).
 
-    The provider's structured output already guarantees the shape (the four
-    lists and each element's fields), so this does not re-check that. A per-field
-    schema cannot guarantee a *cross-reference*, so the only check here is that
-    every flow connects nodes that actually exist.
+    Graph validity (flows referencing real nodes, reachability, ...) is the
+    connector's contract to guarantee and is no longer re-checked here. This
+    keeps only a crash-safety net: a malformed model that would otherwise raise
+    a ``KeyError`` while building is surfaced as a clean ``invalid_model`` error.
     """
-    node_ids = {el["id"] for group in _NODE_GROUPS for el in model[group]}
-    for flow in model["flows"]:
-        for end in ("source", "target"):
-            if flow[end] not in node_ids:
-                raise InvalidModelError(
-                    f"Flow '{flow['id']}' references an unknown node '{flow[end]}'."
-                )
+    model = _decode(raw_response)
+    try:
+        return build(model)
+    except KeyError as exc:
+        raise InvalidModelError(
+            "Process model could not be built (malformed graph)."
+        ) from exc
 
 
 def raw_response_to_bpmn(raw_response):
-    """Turn the connector's reply into BPMN XML: decode -> verify -> build.
+    """Connector reply -> BPMN XML with diagram layout."""
+    return _build(raw_response, laid_out_bpmn)
 
-    Raises ``InvalidModelError`` if the reply is not JSON, or if a flow
-    references a node that does not exist; the route maps that to an
-    ``invalid_model`` response.
-    """
-    model = _decode(raw_response)
-    _verify(model)
-    return json_to_bpmn(model)
+
+def raw_response_to_semantic_bpmn(raw_response):
+    """Connector reply -> geometry-free BPMN XML (input for the PNML path)."""
+    return _build(raw_response, semantic_bpmn)

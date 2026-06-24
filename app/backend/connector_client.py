@@ -5,8 +5,10 @@ from flask import current_app
 # Module-level logger for this module
 logger = logging.getLogger(__name__)
 
-# Default timeout (seconds) for connector HTTP calls.
-DEFAULT_TIMEOUT = 60
+# Default timeout (seconds) for connector HTTP calls. Set to 180s so slow
+# reasoning models (e.g. gpt-5.5, observed at 35-112s per call) finish before
+# the client gives up, instead of surfacing a spurious 500 in the UI.
+DEFAULT_TIMEOUT = 180
 
 
 class ConnectorError(Exception):
