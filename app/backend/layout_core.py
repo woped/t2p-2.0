@@ -4,6 +4,18 @@ Pure graph math: nodes are ``{id: {"w", "h"}}`` and edges
 ``[{"source", "target"}]``; the output is node positions plus waypoint polylines.
 The BPMN and PNML writers feed this and turn the result into their own diagram
 vocabulary.
+
+The four classic Sugiyama stages each use their textbook-grade variant:
+
+1. :func:`_assign_layers` -- DFS cycle break + longest-path layering, then a
+   balancing (tightening) relaxation that pulls slack nodes toward their
+   neighbours, the coordinate-descent counterpart of network-simplex's
+   total-edge-length objective.
+2. :func:`_insert_dummies` -- routing dummies for multi-layer forward edges.
+3. :func:`_order_layers` -- weighted-median sweeps + adjacent transpose, keeping
+   the lowest-crossing ordering seen (the Gansner/STT heuristic).
+4. :func:`_assign_coordinates` -- Brandes-Köpf cross-axis alignment (four runs,
+   averaged) so straight runs stay perfectly aligned and long edges run straight.
 """
 
 from collections import deque, defaultdict
@@ -13,8 +25,9 @@ def _assign_layers(real_ids, successors):
     """Stage 1 -- assign every node a layer (column).
 
     Breaks cycles with a DFS (an edge back to a node still on the stack is a
-    *back edge*, drawn as a loop later), then runs longest-path (Kahn) layering
-    over the acyclic skeleton. Returns ``(node_layer, back_edges)``.
+    *back edge*, drawn as a loop later), runs longest-path (Kahn) layering over
+    the acyclic skeleton, then balances slack nodes. Returns
+    ``(node_layer, back_edges)``.
 
     Without the cycle break, every node on a rework loop (e.g. "reopen claim ->
     reassess") never reaches in-degree zero and gets scattered into a trailing
@@ -61,6 +74,39 @@ def _assign_layers(real_ids, successors):
             indeg_work[nxt] -= 1
             if indeg_work[nxt] == 0:
                 topo_queue.append(nxt)
+
+    # Balancing (tightening) pass. Longest-path anchors every node at its
+    # earliest feasible layer (ASAP); nodes with slack then sit far from their
+    # neighbours, inflating edge spans (and dummy count). Relax each interior
+    # node to the median of its neighbours' layers, clamped to the window that
+    # still respects precedence -- a coordinate-descent on the same total-edge-
+    # length objective network-simplex solves exactly, without the simplex
+    # machinery. Sources/sinks stay anchored so the layer count never grows.
+    acyclic_pred: dict[str, list[str]] = {nid: [] for nid in real_ids}
+    for nid in real_ids:
+        for tgt in acyclic_succ[nid]:
+            acyclic_pred[tgt].append(nid)
+    for _ in range(8):
+        moved = False
+        for nid in real_ids:
+            preds, succs = acyclic_pred[nid], acyclic_succ[nid]
+            if not preds or not succs:
+                continue
+            lo = max(node_layer[p] for p in preds) + 1
+            hi = min(node_layer[s] for s in succs) - 1
+            if hi < lo:
+                continue
+            neigh = sorted(
+                [node_layer[p] for p in preds] + [node_layer[s] for s in succs]
+            )
+            median = neigh[len(neigh) // 2]
+            target = min(max(median, lo), hi)
+            if target != node_layer[nid]:
+                node_layer[nid] = target
+                moved = True
+        if not moved:
+            break
+
     return node_layer, back_edges
 
 
@@ -101,13 +147,49 @@ def _insert_dummies(flows, node_layer, node_w, node_h):
     return chains, is_dummy
 
 
+def _median(positions):
+    """Weighted median of *positions* (sorted), or ``-1`` when empty.
+
+    The standard median heuristic value: the middle neighbour for odd counts,
+    and for even counts the interpolation between the two middle neighbours
+    weighted by the gaps on either side (Gansner et al.). Nodes that score
+    ``-1`` keep their current slot during a sweep.
+    """
+    m = len(positions)
+    if m == 0:
+        return -1.0
+    mid = m // 2
+    if m % 2 == 1:
+        return float(positions[mid])
+    if m == 2:
+        return (positions[0] + positions[1]) / 2.0
+    left = positions[mid - 1] - positions[0]
+    right = positions[m - 1] - positions[mid]
+    if left + right == 0:
+        return (positions[mid - 1] + positions[mid]) / 2.0
+    return (positions[mid - 1] * right + positions[mid] * left) / (left + right)
+
+
+def _inversions(seq):
+    """Number of out-of-order pairs in *seq* -- the crossing count contribution."""
+    cnt = 0
+    for i in range(len(seq)):
+        si = seq[i]
+        for j in range(i + 1, len(seq)):
+            if si > seq[j]:
+                cnt += 1
+    return cnt
+
+
 def _order_layers(node_layer, chains, is_dummy):
     """Stage 3 -- order nodes within each layer to reduce edge crossings.
 
-    Builds the per-layer node lists, then runs barycenter sweeps: each node is
-    pulled toward the mean rank of its neighbours in the adjacent layer. Returns
-    ``(layers, up_adj, down_adj)`` -- the ordered layers and the layer-adjacency
-    used here and again by coordinate assignment.
+    Weighted-median sweeps (alternating direction) reposition each node toward
+    the median slot of its fixed-layer neighbours; an adjacent-transpose pass
+    then greedily swaps neighbours whenever that lowers the crossing count. The
+    lowest-crossing ordering seen across iterations is kept (median + transpose
+    are not monotone on their own). Returns ``(layers, up_adj, down_adj)`` --
+    the ordered layers and the layer-adjacency reused by coordinate assignment.
     """
     layers: dict[int, list[str]] = {}
     for nid, lyr in node_layer.items():
@@ -128,69 +210,227 @@ def _order_layers(node_layer, chains, is_dummy):
                 down_adj[a].append(b)
                 up_adj[b].append(a)
 
-    max_layer = max(layers)
-    rank: dict[str, int] = {}
-    for lyr in layers:
-        for i, nid in enumerate(layers[lyr]):
-            rank[nid] = i
+    sorted_layers = sorted(layers)
+    if len(sorted_layers) < 2:
+        return layers, up_adj, down_adj
 
-    def _sweep(layer_indices, neighbours):
-        for lyr in layer_indices:
-            nodes = layers.get(lyr)
-            if not nodes:
-                continue
-            scored = []
-            for nid in nodes:
-                ne = neighbours[nid]
-                bary = sum(rank[x] for x in ne) / len(ne) if ne else rank[nid]
-                scored.append((bary, rank[nid], nid))
-            scored.sort()
-            layers[lyr] = [nid for _, _, nid in scored]
-            for i, nid in enumerate(layers[lyr]):
-                rank[nid] = i
+    def _positions():
+        return {nid: i for lyr in sorted_layers for i, nid in enumerate(layers[lyr])}
 
-    for _ in range(4):
-        _sweep(range(1, max_layer + 1), up_adj)  # top-down using upper neighbours
-        _sweep(range(max_layer - 1, -1, -1), down_adj)  # bottom-up using lower
+    def _pair_crossings(upper, lower, pos):
+        """Crossings on the edges between two adjacent layers, given *pos*."""
+        seq = []
+        for u in upper:
+            seq.extend(sorted(pos[w] for w in down_adj[u]))
+        return _inversions(seq)
+
+    def _total_crossings(pos):
+        return sum(
+            _pair_crossings(layers[sorted_layers[i]], layers[sorted_layers[i + 1]], pos)
+            for i in range(len(sorted_layers) - 1)
+        )
+
+    def _wmedian(iteration):
+        if iteration % 2 == 0:  # top-down, order each layer by its upper neighbours
+            indices, adj = range(1, len(sorted_layers)), up_adj
+        else:  # bottom-up, by lower neighbours
+            indices, adj = range(len(sorted_layers) - 2, -1, -1), down_adj
+        pos = _positions()
+        for li in indices:
+            row = layers[sorted_layers[li]]
+            med = {v: _median(sorted(pos[x] for x in adj[v])) for v in row}
+            movable = iter(
+                sorted((v for v in row if med[v] >= 0), key=lambda v: med[v])
+            )
+            result = [v if med[v] < 0 else None for v in row]
+            for i in range(len(result)):
+                if result[i] is None:
+                    result[i] = next(movable)
+            layers[sorted_layers[li]] = result
+
+    def _transpose():
+        improved = True
+        while improved:
+            improved = False
+            cur = _total_crossings(_positions())
+            for li in range(len(sorted_layers)):
+                row = layers[sorted_layers[li]]
+                for i in range(len(row) - 1):
+                    row[i], row[i + 1] = row[i + 1], row[i]
+                    new = _total_crossings(_positions())
+                    if new < cur:
+                        cur = new
+                        improved = True
+                    else:
+                        row[i], row[i + 1] = row[i + 1], row[i]
+
+    best_order = {lyr: list(layers[lyr]) for lyr in sorted_layers}
+    best_cross = _total_crossings(_positions())
+    for iteration in range(8):
+        _wmedian(iteration)
+        _transpose()
+        cross = _total_crossings(_positions())
+        if cross < best_cross:
+            best_cross = cross
+            best_order = {lyr: list(layers[lyr]) for lyr in sorted_layers}
+            if best_cross == 0:
+                break
+    layers = best_order
 
     return layers, up_adj, down_adj
 
 
-def _isotonic_fit(values):
-    """Least-squares non-decreasing fit of *values* (pool-adjacent-violators).
+def _mark_type1_conflicts(order, upper, pos, is_dummy):
+    """Flag type-1 conflicts so Brandes-Köpf keeps inner segments straight.
 
-    The optimal way to push an ordered run of desired positions into a monotone
-    sequence with the least total movement -- the core of coordinate assignment.
+    An *inner segment* joins two dummy nodes in adjacent layers (a stretch of a
+    long edge). A type-1 conflict is a non-inner segment crossing an inner one;
+    marking it lets alignment give the inner segment priority, so long edges run
+    straight instead of being bent around. *upper* maps each node to its
+    neighbours in the previous layer (already sorted by *pos*).
     """
-    blocks: list[list[float]] = []  # [sum, count] per pooled block
-    for v in values:
-        s, c = v, 1
-        while blocks and blocks[-1][0] / blocks[-1][1] > s / c:
-            ps, pc = blocks.pop()
-            s += ps
-            c += pc
-        blocks.append([s, c])
-    out: list[float] = []
-    for s, c in blocks:
-        out.extend([s / c] * c)
-    return out
+    marked: set[tuple[str, str]] = set()
+    for i in range(len(order) - 1):
+        upper_row, lower_row = order[i], order[i + 1]
+        k0 = 0
+        scan = 0
+        n_lower = len(lower_row)
+        for l1 in range(n_lower):
+            v = lower_row[l1]
+            inner_up = None
+            if v in is_dummy:
+                inner_up = next((u for u in upper[v] if u in is_dummy), None)
+            if l1 == n_lower - 1 or inner_up is not None:
+                k1 = pos[inner_up] if inner_up is not None else len(upper_row) - 1
+                while scan <= l1:
+                    for u in upper[lower_row[scan]]:
+                        if pos[u] < k0 or pos[u] > k1:
+                            marked.add((u, lower_row[scan]))
+                    scan += 1
+                k0 = k1
+    return marked
 
 
-def _place_in_layer(ids, desired, node_h, v_gap):
-    """Set an ordered layer's node centres as close to *desired* as the non-
-    overlap constraint (>= ``v_gap`` between boxes) allows.
+def _bk_compaction(order, root, align, node_h, v_gap):
+    """Place aligned blocks along the cross axis, packed to the minimum gap.
 
-    Subtracting each node's cumulative minimum offset turns the separation
-    constraint into plain monotonicity, solved exactly by :func:`_isotonic_fit`.
+    Each block (a maximal chain linked by ``align``) gets one coordinate stored
+    at its ``root``; blocks are pushed as close together as the ``v_gap``
+    separation between same-layer neighbours allows, then class offsets
+    (``shift``) merge the block classes. Standard Brandes-Köpf compaction.
     """
-    if not ids:
+    inf = float("inf")
+    x: dict[str, float] = {}
+    sink: dict[str, str] = {}
+    shift: dict[str, float] = {}
+    pred_in_layer: dict[str, str] = {}
+    for row in order:
+        for j in range(1, len(row)):
+            pred_in_layer[row[j]] = row[j - 1]
+    for row in order:
+        for v in row:
+            sink[v] = v
+            shift[v] = inf
+
+    def place(v):
+        if v in x:
+            return
+        x[v] = 0.0
+        w = v
+        while True:
+            if w in pred_in_layer:
+                above = pred_in_layer[w]
+                u = root[above]
+                place(u)
+                if sink[v] == v:
+                    sink[v] = sink[u]
+                delta = node_h[w] / 2 + v_gap + node_h[above] / 2
+                if sink[v] == sink[u]:
+                    x[v] = max(x[v], x[u] + delta)
+                else:
+                    shift[sink[u]] = min(shift[sink[u]], x[v] - x[u] - delta)
+            w = align[w]
+            if w == v:
+                break
+
+    for row in order:
+        for v in row:
+            if root[v] == v:
+                place(v)
+    for row in order:
+        for v in row:
+            x[v] = x[root[v]]
+            s = shift[sink[root[v]]]
+            if s < inf:
+                x[v] += s
+    return x
+
+
+def _bk_run(layer_order, upper_adj, node_h, is_dummy, v_gap):
+    """One Brandes-Köpf alignment + compaction for a given graph orientation.
+
+    *layer_order* is the layer stack top-to-bottom in this run's vertical
+    direction; *upper_adj* maps each node to its neighbours in the previous
+    layer of that orientation. Returns a cross-axis coordinate per node.
+    """
+    pos = {v: j for row in layer_order for j, v in enumerate(row)}
+    upper = {
+        v: sorted(upper_adj.get(v, ()), key=lambda u: pos[u])
+        for row in layer_order
+        for v in row
+    }
+    marked = _mark_type1_conflicts(layer_order, upper, pos, is_dummy)
+
+    root = {v: v for row in layer_order for v in row}
+    align = {v: v for row in layer_order for v in row}
+    for i in range(1, len(layer_order)):
+        r = -1
+        for v in layer_order[i]:
+            ups = upper[v]
+            d = len(ups)
+            if d == 0:
+                continue
+            for m in ((d - 1) // 2, d // 2):  # one (odd) or two (even) medians
+                if align[v] == v:
+                    u = ups[m]
+                    if (u, v) not in marked and r < pos[u]:
+                        align[u] = v
+                        root[v] = root[u]
+                        align[v] = root[u]
+                        r = pos[u]
+    return _bk_compaction(layer_order, root, align, node_h, v_gap)
+
+
+def _brandes_koepf(layers, up_adj, down_adj, node_h, is_dummy, v_gap):
+    """Cross-axis (y) coordinate per node via Brandes-Köpf, four runs averaged.
+
+    Runs the alignment from all four corners -- {align upward, downward} x
+    {pack leftward, rightward} -- and averages them. Each run keeps within-layer
+    separation, and they share the real within-layer order, so the average is
+    itself a feasible (overlap-free) placement while balancing the four biases;
+    averaging (rather than the median-of-two) is what guarantees that
+    feasibility. Long/straight runs come out aligned, which is what removes the
+    diagonal drift of a plain neighbour-mean placement.
+    """
+    sorted_layers = sorted(layers)
+    order = [layers[lyr] for lyr in sorted_layers]
+    if not order:
         return {}
-    prefix = [0.0] * len(ids)
-    for i in range(1, len(ids)):
-        sep = node_h[ids[i - 1]] / 2 + v_gap + node_h[ids[i]] / 2
-        prefix[i] = prefix[i - 1] + sep
-    fit = _isotonic_fit([desired[ids[i]] - prefix[i] for i in range(len(ids))])
-    return {ids[i]: fit[i] + prefix[i] for i in range(len(ids))}
+
+    def reflect(rows):
+        return [row[::-1] for row in rows]
+
+    runs = [
+        (order, up_adj, 1),  # align up,   pack one way
+        (reflect(order), up_adj, -1),  # align up,   pack the other
+        (order[::-1], down_adj, 1),  # align down, pack one way
+        (reflect(order[::-1]), down_adj, -1),  # align down, pack the other
+    ]
+    coords = [
+        {v: sign * val for v, val in _bk_run(o, adj, node_h, is_dummy, v_gap).items()}
+        for o, adj, sign in runs
+    ]
+    return {v: sum(c[v] for c in coords) / len(coords) for row in order for v in row}
 
 
 def _assign_coordinates(
@@ -199,10 +439,8 @@ def _assign_coordinates(
     """Stage 4 -- assign pixel coordinates to the ordered layers.
 
     Columns go left to right (column width = widest node in the layer). The
-    vertical (cross-axis) coordinate is what makes edges straight: each node is
-    iteratively pulled toward the mean centre of its neighbours, and
-    :func:`_place_in_layer` resolves the resulting overlaps while keeping each
-    node as close to that target as the ``v_gap`` separation allows. Returns
+    vertical (cross-axis) coordinate comes from :func:`_brandes_koepf`, which
+    keeps straight runs aligned and long edges straight. Returns
     ``(positions, centers, col_x, col_w)`` -- ``positions`` are top-left corners
     of the real nodes; ``centers`` covers dummies too (for routing).
     """
@@ -216,30 +454,7 @@ def _assign_coordinates(
         col_x[lyr] = x
         x += col_w[lyr] + h_gap
 
-    # Initial centres: simple top-to-bottom stacking per layer.
-    yc: dict[str, float] = {}
-    for lyr in sorted_layers:
-        y = 0.0
-        for nid in layers[lyr]:
-            y += node_h[nid] / 2
-            yc[nid] = y
-            y += node_h[nid] / 2 + v_gap
-
-    # Iteratively align each node with the mean centre of its neighbours (both
-    # adjacent layers), resolving overlaps after every layer. Alternating the
-    # sweep direction lets alignment propagate both ways; a few passes converge.
-    neighbours = {nid: up_adj[nid] + down_adj[nid] for nid in yc}
-    for sweep in range(8):
-        order = sorted_layers if sweep % 2 == 0 else sorted_layers[::-1]
-        for lyr in order:
-            ids = layers[lyr]
-            desired = {
-                nid: sum(yc[m] for m in neighbours[nid]) / len(neighbours[nid])
-                if neighbours[nid]
-                else yc[nid]
-                for nid in ids
-            }
-            yc.update(_place_in_layer(ids, desired, node_h, v_gap))
+    yc = _brandes_koepf(layers, up_adj, down_adj, node_h, is_dummy, v_gap)
 
     # Normalise so the topmost node sits at y_offset.
     shift = y_offset - min((yc[n] - node_h[n] / 2 for n in yc), default=0.0)
@@ -270,10 +485,10 @@ def _sugiyama_layout(
     Runs the classic Sugiyama stages, each delegated to a helper, to keep edges
     from crossing nodes or stacking on top of one another:
 
-    1. :func:`_assign_layers` -- cycle break + longest-path layering -> columns.
+    1. :func:`_assign_layers` -- cycle break + longest-path layering + balance.
     2. :func:`_insert_dummies` -- routing dummies for multi-layer forward edges.
-    3. :func:`_order_layers` -- barycenter sweeps to reduce crossings.
-    4. :func:`_assign_coordinates` -- columns left to right, stacked + aligned.
+    3. :func:`_order_layers` -- median sweeps + transpose to reduce crossings.
+    4. :func:`_assign_coordinates` -- columns left to right, Brandes-Köpf y.
 
     This stage only *places nodes*. It produces no edge waypoints and writes no
     XML: it returns node positions plus the structural metadata (``ctx``) that
@@ -382,9 +597,10 @@ def _route_edges(positions, ctx, flows, strategy):
         and edges sharing a split source or join target bundle onto a shared
         channel.
       * ``"sparse"`` -- route only what a straight line cannot draw cleanly:
-        loops and forward edges spanning more than one layer (whose straight line
-        would cut across the columns between). Adjacent-layer edges stay straight
-        (``[]``) -- correct and native for PNML.
+        loops, forward edges spanning more than one layer, and adjacent-layer
+        edges whose endpoints sit at different heights (a split/join fan, which
+        a straight line would draw as a diagonal). Flat adjacent-layer edges
+        stay straight (``[]``) -- correct and native for PNML.
     Back-edges always go through their own lane below the diagram, regardless of
     strategy.
     """
@@ -444,7 +660,11 @@ def _route_edges(positions, ctx, flows, strategy):
             return False
         if strategy == "full_ortho":
             return True
-        return len(hops) > 1  # "sparse": only multi-layer spans
+        if len(hops) > 1:  # multi-layer span: must detour around skipped columns
+            return True
+        # Single adjacent-layer hop: route it only when it changes height (a
+        # split/join fan); a flat hop is a clean straight line, left to ``[]``.
+        return abs(hops[0]["y1"] - hops[0]["y2"]) >= 1
 
     # Every height-changing hop of a routed forward edge needs a vertical channel
     # in its column gap; collect them per gap (skipping edges left straight).
