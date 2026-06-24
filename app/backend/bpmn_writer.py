@@ -7,6 +7,9 @@ from app.backend.layout_core import _route_edges, _sugiyama_layout
 
 logger = logging.getLogger(__name__)
 
+# Node sizes match bpmn-js getDefaultSize (ElementFactory.js) -- the de-facto
+# BPMN rendering standard. They are written as <dc:Bounds> and rendered 1:1 by
+# woped-web (bpmn-js) and any external BPMN tool, so they stay conventional.
 _BPMN_EVENT_W, _BPMN_EVENT_H = 36, 36
 _BPMN_TASK_W, _BPMN_TASK_H = 100, 80
 _BPMN_GATEWAY_W, _BPMN_GATEWAY_H = 50, 50

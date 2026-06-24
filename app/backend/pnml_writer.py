@@ -12,12 +12,16 @@ from app.backend.layout_core import _route_edges, _sugiyama_layout
 
 logger = logging.getLogger(__name__)
 
+# PNML node sizes are layout-internal only (we emit no <dimension>; PNML clients
+# render at their own fixed size). They mirror the rendering clients' footprint
+# so our spacing matches what is drawn: place 50x50 = woped-next VISUAL.place
+# (radius 25 -> 50 diameter); transition 40x30 = woped-next VISUAL.transition.
 _PNML_PLACE_W, _PNML_PLACE_H = 50, 50
-_PNML_TRANS_W, _PNML_TRANS_H = 50, 30
+_PNML_TRANS_W, _PNML_TRANS_H = 40, 30
 
-# Approximate glyph width (px) of WoPeD's small label font (~11px). Labels are
-# drawn centred BELOW the node, so a column must reserve at least the label's
-# width or adjacent labels overlap.
+# Rough glyph width (px) of the small label font; least-grounded value here.
+# Labels are drawn centred BELOW the node, so a column must reserve at least the
+# label's width or adjacent labels overlap.
 _LABEL_CHAR_PX = 7
 
 
