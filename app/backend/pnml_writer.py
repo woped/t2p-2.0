@@ -48,25 +48,19 @@ def _label_text(elem, ns_prefix):
 
 
 def _extract_graph(root, ns_prefix):
-    """Read the raw graph from the PNML tree -- no geometry.
+    """Read the raw graph from the PNML tree -- topology only.
 
     Walks the whole tree (nested ``<pnml><net><page>...`` hierarchies included).
-    Returns ``(nodes, edges)``: nodes as ``{id, kind, label, element}`` (kind is
-    ``"place"`` or ``"transition"``), edges as ``{source, target, element}``.
+    Returns ``(nodes, edges)``: nodes as ``{id, element}``, edges as
+    ``{source, target, element}``. The size inputs (kind, label) are derived from
+    the element later, in :func:`_node_sizes`.
     """
     nodes: list[dict] = []
     for kind in ("place", "transition"):
         for el in root.iter(f"{ns_prefix}{kind}"):
             nid = el.get("id")
             if nid:
-                nodes.append(
-                    {
-                        "id": nid,
-                        "kind": kind,
-                        "label": _label_text(el, ns_prefix),
-                        "element": el,
-                    }
-                )
+                nodes.append({"id": nid, "element": el})
     edges = [
         {"source": arc.get("source"), "target": arc.get("target"), "element": arc}
         for arc in root.iter(f"{ns_prefix}arc")
@@ -81,15 +75,16 @@ _PNML_BASE = {
 }
 
 
-def _node_sizes(nodes):
-    """Assign each node a layout box ``{w, h}``: base size by kind, widened to fit
-    the label so a long name does not overlap (WoPeD draws it below the node).
+def _node_sizes(nodes, ns_prefix):
+    """Box ``{w, h}`` per node: base size by kind (the element's tag), widened to
+    fit the label so a long name does not overlap (WoPeD draws it below the node).
     """
     sizes: dict[str, dict] = {}
     for n in nodes:
-        base_w, base_h = _PNML_BASE[n["kind"]]
+        base_w, base_h = _PNML_BASE[n["element"].tag.rpartition("}")[2]]
+        label = _label_text(n["element"], ns_prefix)
         sizes[n["id"]] = {
-            "w": max(base_w, len(n["label"].strip()) * _LABEL_CHAR_PX),
+            "w": max(base_w, len(label.strip()) * _LABEL_CHAR_PX),
             "h": base_h,
         }
     return sizes
@@ -139,7 +134,7 @@ def assign_pnml_coordinates(pnml_xml):
     if not nodes:
         return pnml_xml  # nothing to lay out
 
-    elements_by_id = _node_sizes(nodes)
+    elements_by_id = _node_sizes(nodes, ns_prefix)
     positions, ctx = _sugiyama_layout(
         elements_by_id, edges, h_gap=80, v_gap=50, x_offset=100, y_offset=100
     )

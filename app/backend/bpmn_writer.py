@@ -128,11 +128,13 @@ def _bpmn_node_size(tag):
 
 
 def _extract_graph(process):
-    """Read the raw graph from the semantic ``<process>`` tree -- no geometry.
+    """Read the raw graph from the semantic ``<process>`` tree -- topology only.
 
     The tree the diagram decorates is the single source of truth (the model is
-    not re-read). Returns ``(nodes, edges)``: nodes as ``{id, tag}`` in document
-    order, edges (sequence flows) as ``{source, target, id}``.
+    not re-read). Returns ``(nodes, edges)``: nodes as ``{id, element}`` in
+    document order, edges (sequence flows) as ``{source, target, element}``.
+    Anything derived (the box size from the tag, the edge id) is left to the
+    later steps.
     """
     ns = f"{{{_NS['bpmn']}}}"
     nodes: list[dict] = []
@@ -144,17 +146,19 @@ def _extract_graph(process):
                 {
                     "source": child.get("sourceRef"),
                     "target": child.get("targetRef"),
-                    "id": child.get("id"),
+                    "element": child,
                 }
             )
         else:
-            nodes.append({"id": child.get("id"), "tag": tag})
+            nodes.append({"id": child.get("id"), "element": child})
     return nodes, edges
 
 
 def _node_sizes(nodes):
-    """Assign a layout box ``{w, h}`` to each node by its BPMN kind (tag)."""
-    return {n["id"]: _bpmn_node_size(n["tag"]) for n in nodes}
+    """Box ``{w, h}`` per node, derived from its BPMN kind (the element's tag)."""
+    return {
+        n["id"]: _bpmn_node_size(n["element"].tag.rpartition("}")[2]) for n in nodes
+    }
 
 
 def _add_diagram(definitions):
@@ -206,10 +210,11 @@ def _add_diagram(definitions):
 
     routes = _route_edges(positions, ctx, edges, "full_ortho")
     for idx, edge in enumerate(edges):
+        fid = edge["element"].get("id")
         bpmn_edge = ET.SubElement(
             bpmn_plane,
             f"{{{_NS['bpmndi']}}}BPMNEdge",
-            attrib={"id": f"{edge['id']}_di", "bpmnElement": edge["id"]},
+            attrib={"id": f"{fid}_di", "bpmnElement": fid},
         )
         prev = None
         for px, py in routes[idx]:
