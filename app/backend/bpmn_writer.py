@@ -191,10 +191,17 @@ def _add_diagram(definitions):
 
     for node in nodes:
         nid = node["id"]
+        shape_attrib = {"id": f"{nid}_di", "bpmnElement": nid}
+        # The exclusive-gateway X is an optional BPMN marker: bpmn-js only draws
+        # it when isMarkerVisible="true". Parallel gateways always show their +,
+        # so without this flag XOR gateways render as bare diamonds while AND
+        # gateways keep their marker. Set it so XOR shows its X.
+        if node["element"].tag.endswith("exclusiveGateway"):
+            shape_attrib["isMarkerVisible"] = "true"
         bpmn_shape = ET.SubElement(
             bpmn_plane,
             f"{{{_NS['bpmndi']}}}BPMNShape",
-            attrib={"id": f"{nid}_di", "bpmnElement": nid},
+            attrib=shape_attrib,
         )
         pos = positions[nid]
         ET.SubElement(

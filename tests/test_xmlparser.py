@@ -211,6 +211,39 @@ def test_laid_out_bpmn_with_parallel_gateway():
     assert "ParallelGateway" in result or "parallelGateway" in result
 
 
+def test_exclusive_gateway_shape_marks_marker_visible():
+    """The XOR marker is optional in BPMN -- bpmn-js only draws the X when the
+    shape carries isMarkerVisible="true". Parallel gateways always show their +,
+    so the flag must be set for exclusive gateways (and only those) to keep XOR
+    and AND visually distinct."""
+    data = {
+        "events": [
+            {"id": "start1", "type": "Start", "name": "Start"},
+            {"id": "end1", "type": "End", "name": "End"},
+        ],
+        "tasks": [{"id": "task1", "name": "Task 1", "type": "UserTask"}],
+        "gateways": [
+            {"id": "xor1", "type": "ExclusiveGateway", "name": "Decision"},
+            {"id": "and1", "type": "ParallelGateway", "name": "Split"},
+        ],
+        "flows": [
+            {"id": "f1", "source": "start1", "target": "xor1", "type": "SequenceFlow"},
+            {"id": "f2", "source": "xor1", "target": "and1", "type": "SequenceFlow"},
+            {"id": "f3", "source": "and1", "target": "task1", "type": "SequenceFlow"},
+            {"id": "f4", "source": "task1", "target": "end1", "type": "SequenceFlow"},
+        ],
+    }
+
+    root = _parse(laid_out_bpmn(data))
+    marker_by_element = {
+        shape.get("bpmnElement"): shape.get("isMarkerVisible")
+        for shape in root.iter(f"{{{_BPMNDI}}}BPMNShape")
+    }
+
+    assert marker_by_element["xor1"] == "true"
+    assert marker_by_element["and1"] is None
+
+
 def test_laid_out_bpmn_empty_arrays():
     """Test BPMN generation with minimal data"""
     data = {
