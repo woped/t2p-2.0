@@ -186,9 +186,12 @@ def assign_pnml_coordinates(pnml_xml):
 
 
 def _clean_pnml(root, ns_prefix):
-    """Strip noise the transformer leaves in the PNML -- no geometry, no client
-    workarounds, just a cleaner standard net:
+    """Tidy the transformer's PNML for clients:
 
+    * Anonymous nodes (silent places, operator helper transitions) carry no
+      ``<name>``, so WoPeD's Fat Client falls back to showing the raw id
+      ("SILENTFROMxTOy", "g1_op_1", ...) as a long, overlapping label. Give them
+      an empty ``<name>`` so they render unlabelled instead.
     * The transformer marks every UserTask with a WoPeD
       ``<trigger>``/``<transitionResource>`` -- that marker is how the reverse
       (pnml->bpmn) direction tells a UserTask from a plain Task, so it is kept
@@ -201,6 +204,13 @@ def _clean_pnml(root, ns_prefix):
         root.iter(f"{ns_prefix}transition")
     )
     for elem in nodes:
+        # Empty <name> for unnamed nodes so the Fat Client renders them blank
+        # instead of their raw id (the "Textbrei" overlap bug).
+        if elem.find(f"{ns_prefix}name") is None:
+            name_el = ET.Element(f"{ns_prefix}name")
+            ET.SubElement(name_el, f"{ns_prefix}text").text = ""
+            elem.insert(0, name_el)
+
         for ts in elem.findall(f"{ns_prefix}toolspecific"):
             trigger = ts.find(f"{ns_prefix}trigger")
             resource = ts.find(f"{ns_prefix}transitionResource")
