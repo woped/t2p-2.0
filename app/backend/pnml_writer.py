@@ -54,6 +54,39 @@ def _label_width(elem, ns_prefix):
     return len(text.text.strip()) * _LABEL_CHAR_PX
 
 
+def _extract_graph(root, ns_prefix):
+    """Read the layout graph from the PNML tree.
+
+    Walks the whole tree (so nested ``<pnml><net><page>...`` hierarchies are
+    handled). Returns ``(elements_by_id, flows, handles, arcs)``: node sizes
+    keyed by id (each widened for its label so neighbours do not overlap), the
+    arcs as ``{source, target}`` flows, a map id -> node element to write
+    coordinates back inline, and the raw ``(arc_el, source, target)`` triples for
+    waypoints.
+    """
+    elements_by_id: dict[str, dict] = {}
+    handles: dict[str, ET.Element] = {}
+    for place in root.iter(f"{ns_prefix}place"):
+        pid = place.get("id")
+        if pid:
+            w = max(_PNML_PLACE_W, _label_width(place, ns_prefix))
+            elements_by_id[pid] = {"w": w, "h": _PNML_PLACE_H}
+            handles[pid] = place
+    for trans in root.iter(f"{ns_prefix}transition"):
+        tid = trans.get("id")
+        if tid:
+            w = max(_PNML_TRANS_W, _label_width(trans, ns_prefix))
+            elements_by_id[tid] = {"w": w, "h": _PNML_TRANS_H}
+            handles[tid] = trans
+    arcs = [
+        (arc, arc.get("source"), arc.get("target"))
+        for arc in root.iter(f"{ns_prefix}arc")
+        if arc.get("source") and arc.get("target")
+    ]
+    flows = [{"source": src, "target": tgt} for _, src, tgt in arcs]
+    return elements_by_id, flows, handles, arcs
+
+
 def assign_pnml_coordinates(pnml_xml):
     """Parse a PNML XML string and assign proper layout coordinates to all
     places and transitions.
@@ -94,34 +127,9 @@ def assign_pnml_coordinates(pnml_xml):
     if ns_prefix:
         ET.register_namespace("", ns_prefix[1:-1])
 
-    # Collect all places and transitions from the entire tree (handles
-    # nested <pnml><net><page>... hierarchies).
-    elements_by_id: dict[str, dict] = {}
-    elem_xml_map: dict[str, ET.Element] = {}
-
-    for place in root.iter(f"{ns_prefix}place"):
-        pid = place.get("id")
-        if pid:
-            w = max(_PNML_PLACE_W, _label_width(place, ns_prefix))
-            elements_by_id[pid] = {"w": w, "h": _PNML_PLACE_H}
-            elem_xml_map[pid] = place
-
-    for trans in root.iter(f"{ns_prefix}transition"):
-        tid = trans.get("id")
-        if tid:
-            w = max(_PNML_TRANS_W, _label_width(trans, ns_prefix))
-            elements_by_id[tid] = {"w": w, "h": _PNML_TRANS_H}
-            elem_xml_map[tid] = trans
-
+    elements_by_id, flows, elem_xml_map, arcs = _extract_graph(root, ns_prefix)
     if not elements_by_id:
         return pnml_xml  # nothing to lay out
-
-    arcs = [
-        (arc, arc.get("source"), arc.get("target"))
-        for arc in root.iter(f"{ns_prefix}arc")
-        if arc.get("source") and arc.get("target")
-    ]
-    flows = [{"source": src, "target": tgt} for _, src, tgt in arcs]
 
     positions, ctx = _sugiyama_layout(
         elements_by_id, flows, h_gap=80, v_gap=50, x_offset=100, y_offset=100

@@ -102,18 +102,55 @@ def _build_semantic_process(model):
     return definitions
 
 
-def _add_diagram(definitions, model):
+def _bpmn_node_size(tag):
+    """Layout box size for a BPMN flow-node tag (gateway / event / task)."""
+    if tag.endswith("Gateway"):
+        return {"w": _BPMN_GATEWAY_W, "h": _BPMN_GATEWAY_H}
+    if tag.endswith("Event"):
+        return {"w": _BPMN_EVENT_W, "h": _BPMN_EVENT_H}
+    return {"w": _BPMN_TASK_W, "h": _BPMN_TASK_H}
+
+
+def _extract_graph(process):
+    """Read the layout graph from the semantic ``<process>`` tree.
+
+    Returns ``(elements_by_id, flows, node_ids)``: node sizes keyed by id, the
+    sequence flows as ``{source, target, id}``, and the node ids in document
+    order. The geometry-free tree the diagram decorates is the single source of
+    truth -- node size follows the element's tag, the model is not re-read.
+    """
+    ns = f"{{{_NS['bpmn']}}}"
+    elements_by_id: dict[str, dict] = {}
+    node_ids: list[str] = []
+    flows: list[dict] = []
+    for child in process:
+        tag = child.tag[len(ns) :] if child.tag.startswith(ns) else child.tag
+        if tag == "sequenceFlow":
+            flows.append(
+                {
+                    "source": child.get("sourceRef"),
+                    "target": child.get("targetRef"),
+                    "id": child.get("id"),
+                }
+            )
+        else:
+            nid = child.get("id")
+            elements_by_id[nid] = _bpmn_node_size(tag)
+            node_ids.append(nid)
+    return elements_by_id, flows, node_ids
+
+
+def _add_diagram(definitions):
     """Add the BPMN diagram interchange (layout + shapes + edges).
 
-    Sizes every node, computes a layered layout, then emits a BPMNShape per node
-    and a BPMNEdge per flow. Edges are routed orthogonally: vertical segments
-    ("risers") live in the gaps between columns, never inside one, and each riser
-    in a gap gets its own channel so arrows do not run on top of one another.
-    Edges that skip layers are threaded through reserved dummy lanes (see
-    :func:`_sugiyama_layout`) so they do not cross the nodes in between.
-    ``verify`` upstream guarantees every node and flow endpoint exists, so
-    positions are looked up directly.
+    Reads the graph from the semantic ``<process>`` tree it decorates, computes a
+    layered layout, then emits a BPMNShape per node and a BPMNEdge per flow.
+    Edges are routed orthogonally (see :func:`_route_edges`). ``verify`` upstream
+    guarantees every node and flow endpoint exists.
     """
+    process = definitions.find(f"{{{_NS['bpmn']}}}process")
+    elements_by_id, flows, node_ids = _extract_graph(process)
+
     bpmn_di = ET.SubElement(
         definitions, f"{{{_NS['bpmndi']}}}BPMNDiagram", attrib={"id": "BPMNDiagram_1"}
     )
@@ -123,25 +160,17 @@ def _add_diagram(definitions, model):
         attrib={"id": "BPMNPlane_1", "bpmnElement": "Process_1"},
     )
 
-    sizes: dict[str, dict] = {}
-    for event in model["events"]:
-        sizes[event["id"]] = {"w": _BPMN_EVENT_W, "h": _BPMN_EVENT_H}
-    for task in model["tasks"]:
-        sizes[task["id"]] = {"w": _BPMN_TASK_W, "h": _BPMN_TASK_H}
-    for gateway in model["gateways"]:
-        sizes[gateway["id"]] = {"w": _BPMN_GATEWAY_W, "h": _BPMN_GATEWAY_H}
-
     positions, ctx = _sugiyama_layout(
-        sizes, model["flows"], h_gap=180, v_gap=90, x_offset=50, y_offset=50
+        elements_by_id, flows, h_gap=180, v_gap=90, x_offset=50, y_offset=50
     )
 
-    for element in model["tasks"] + model["events"] + model["gateways"]:
+    for nid in node_ids:
         bpmn_shape = ET.SubElement(
             bpmn_plane,
             f"{{{_NS['bpmndi']}}}BPMNShape",
-            attrib={"id": f"{element['id']}_di", "bpmnElement": element["id"]},
+            attrib={"id": f"{nid}_di", "bpmnElement": nid},
         )
-        pos = positions[element["id"]]
+        pos = positions[nid]
         ET.SubElement(
             bpmn_shape,
             f"{{{_NS['dc']}}}Bounds",
@@ -153,11 +182,11 @@ def _add_diagram(definitions, model):
             },
         )
 
-    if not model["flows"]:
+    if not flows:
         return
 
-    routes = _route_edges(positions, ctx, model["flows"], "full_ortho")
-    for idx, flow in enumerate(model["flows"]):
+    routes = _route_edges(positions, ctx, flows, "full_ortho")
+    for idx, flow in enumerate(flows):
         bpmn_edge = ET.SubElement(
             bpmn_plane,
             f"{{{_NS['bpmndi']}}}BPMNEdge",
@@ -206,5 +235,5 @@ def laid_out_bpmn(model):
     """Convert a model into BPMN XML with diagram interchange (shapes + edges)."""
     _log_conversion("laid-out", model)
     definitions = _build_semantic_process(model)
-    _add_diagram(definitions, model)
+    _add_diagram(definitions)
     return _serialize_bpmn(definitions)
