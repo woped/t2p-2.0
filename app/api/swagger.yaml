@@ -266,6 +266,11 @@ components:
           type: string
           description: Model name; one of the values from GET /v2/models.
           example: gpt-4o
+        prompting_strategy:
+          type: string
+          description: Prompting strategy forwarded to the connector. Optional.
+          enum: [zero_shot, few_shot]
+          default: zero_shot
 
     GenerateResult:
       type: object

@@ -51,11 +51,15 @@ class ConnectorClient:
             extra={"base_url": self.base_url, "timeout": self.timeout},
         )
 
-    def generate(self, authorization, user_text, provider, model):
+    def generate(
+        self, authorization, user_text, provider, model, prompting_strategy=None
+    ):
         """Call the connector's ``POST /generate`` and return ``raw_response``.
 
         :param authorization: the client's ``Authorization`` header value,
             forwarded unchanged (e.g. ``"Bearer <api_key>"``).
+        :param prompting_strategy: optional strategy forwarded to connector,
+            for example ``"zero_shot"`` or ``"few_shot"``.
         :raises ConnectorError: on connection failure, timeout, non-200, or a
             malformed response body.
         """
@@ -63,6 +67,8 @@ class ConnectorClient:
         # Authorization is forwarded verbatim; never log header values.
         headers = {"Authorization": authorization, "Content-Type": "application/json"}
         payload = {"user_text": user_text, "provider": provider, "model": model}
+        if prompting_strategy is not None:
+            payload["prompting_strategy"] = prompting_strategy
 
         logger.info(
             "Calling connector /generate",

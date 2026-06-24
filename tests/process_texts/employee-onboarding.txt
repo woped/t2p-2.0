@@ -1,0 +1,5 @@
+When a new employee joins the company, HR first creates their profile in the HR system and sends a welcome email with login credentials. The IT department is notified automatically and sets up a laptop, installs required software, and grants access to internal tools based on the employee's role.
+
+On the first day, the employee attends an orientation session held by HR. Afterwards, their line manager assigns a buddy from the team and schedules a series of onboarding meetings with key stakeholders for the first two weeks.
+
+The employee completes mandatory compliance training within the first five days. Once all training modules are marked complete, HR closes the onboarding checklist and the employee is considered fully onboarded.

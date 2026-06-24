@@ -5,6 +5,7 @@ from functools import wraps
 
 import requests
 from flask import jsonify, make_response, request, send_from_directory
+from flasgger import swag_from
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api import api_bp
@@ -69,26 +70,29 @@ def _removed_api_call_response():
     return response
 
 
-def _connector_generate(authorization, text, provider, model):
+def _connector_generate(authorization, text, provider, model, prompting_strategy=None):
     return ConnectorClient().generate(
         authorization=authorization,
         user_text=text,
         provider=provider,
         model=model,
+        prompting_strategy=prompting_strategy,
     )
 
 
-def _generate_bpmn(authorization, text, provider, model):
+def _generate_bpmn(authorization, text, provider, model, prompting_strategy=None):
     """Generate laid-out BPMN XML from a text prompt."""
     return raw_response_to_bpmn(
-        _connector_generate(authorization, text, provider, model)
+        _connector_generate(authorization, text, provider, model, prompting_strategy)
     )
 
 
-def _generate_semantic_bpmn(authorization, text, provider, model):
+def _generate_semantic_bpmn(
+    authorization, text, provider, model, prompting_strategy=None
+):
     """Generate geometry-free BPMN XML -- the input the PNML path feeds the transformer."""
     return raw_response_to_semantic_bpmn(
-        _connector_generate(authorization, text, provider, model)
+        _connector_generate(authorization, text, provider, model, prompting_strategy)
     )
 
 
@@ -234,6 +238,7 @@ def _v2_generate(target):
             text=data.get("text"),
             provider=data.get("provider"),
             model=data.get("model"),
+            prompting_strategy=data.get("prompting_strategy"),
         )
 
         if target == "pnml":
@@ -305,16 +310,138 @@ def _v2_generate(target):
 
 
 @api_bp.route("/v2/generate/bpmn", methods=["POST"])
+@swag_from(
+    {
+        "tags": ["v2"],
+        "summary": "Generate BPMN",
+        "description": "Generate a BPMN model from process text.",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["text", "provider", "model"],
+                        "properties": {
+                            "text": {"type": "string"},
+                            "provider": {"type": "string"},
+                            "model": {"type": "string"},
+                            "prompting_strategy": {
+                                "type": "string",
+                                "enum": ["zero_shot", "few_shot"],
+                                "default": "zero_shot",
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "Generation successful",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"result": {"type": "string"}},
+                        }
+                    }
+                },
+            },
+            "400": {"description": "Invalid request"},
+            "401": {"description": "Unauthorized"},
+            "500": {"description": "Internal or upstream error"},
+        },
+    }
+)
 def v2_generate_bpmn():
     return _v2_generate("bpmn")
 
 
 @api_bp.route("/v2/generate/pnml", methods=["POST"])
+@swag_from(
+    {
+        "tags": ["v2"],
+        "summary": "Generate PNML",
+        "description": "Generate a PNML model from process text via BPMN transformation.",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["text", "provider", "model"],
+                        "properties": {
+                            "text": {"type": "string"},
+                            "provider": {"type": "string"},
+                            "model": {"type": "string"},
+                            "prompting_strategy": {
+                                "type": "string",
+                                "enum": ["zero_shot", "few_shot"],
+                                "default": "zero_shot",
+                            },
+                        },
+                    }
+                }
+            },
+        },
+        "responses": {
+            "200": {
+                "description": "Generation successful",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"result": {"type": "string"}},
+                        }
+                    }
+                },
+            },
+            "400": {"description": "Invalid request"},
+            "401": {"description": "Unauthorized"},
+            "500": {"description": "Internal, upstream, or transform error"},
+        },
+    }
+)
 def v2_generate_pnml():
     return _v2_generate("pnml")
 
 
 @api_bp.route("/v2/models", methods=["GET"])
+@swag_from(
+    {
+        "tags": ["v2"],
+        "summary": "List available models",
+        "description": "List provider/model pairs advertised by the connector.",
+        "responses": {
+            "200": {
+                "description": "Available models",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "models": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "provider": {"type": "string"},
+                                            "model": {"type": "string"},
+                                        },
+                                    },
+                                }
+                            },
+                        }
+                    }
+                },
+            },
+            "500": {"description": "Upstream or internal error"},
+        },
+    }
+)
 def v2_models():
     start_time = time.time()
     status = "200"
@@ -338,6 +465,26 @@ def v2_models():
 
 
 @api_bp.route("/v2/health", methods=["GET"])
+@swag_from(
+    {
+        "tags": ["v2"],
+        "summary": "Health check",
+        "description": "Shallow service liveness endpoint.",
+        "responses": {
+            "200": {
+                "description": "Service is up",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "properties": {"status": {"type": "string"}},
+                        }
+                    }
+                },
+            }
+        },
+    }
+)
 def v2_health():
     REQUEST_COUNT.labels(method="GET", endpoint="/v2/health", status="200").inc()
     return jsonify({"status": "ok"}), 200
