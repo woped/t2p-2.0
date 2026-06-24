@@ -19,10 +19,13 @@ logger = logging.getLogger(__name__)
 _PNML_PLACE_W, _PNML_PLACE_H = 50, 50
 _PNML_TRANS_W, _PNML_TRANS_H = 40, 30
 
-# Rough glyph width (px) of the small label font; least-grounded value here.
-# Labels are drawn centred BELOW the node, so a column must reserve at least the
-# label's width or adjacent labels overlap.
-_LABEL_CHAR_PX = 7
+# Pessimistic glyph width (px) per label character, grounded in the PNML clients'
+# label fonts: WoPeD Fat Client uses Verdana 11 (DEFAULT_LABEL_FONT), woped-next
+# 12px. Labels render centred BELOW the node, so under-reserving makes adjacent
+# labels overlap -- worse than a slightly loose layout. We reserve a capital's
+# advance of the larger font (12px, cap ~0.72 em ~= 8.6 px) rounded up, so even
+# an all-caps label does not collide; normal mixed-case text is over-reserved.
+_LABEL_CHAR_PX = 9
 
 
 def _set_arc_waypoints(arc_el, points, ns_prefix):
