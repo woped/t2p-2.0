@@ -452,6 +452,10 @@ def _route_edges(positions, ctx, flows, strategy):
     for idx, hops in hops_by_flow.items():
         if not _routed_forward(idx):
             continue
+        if len(chains[idx]) > 2:
+            # Multi-layer spans route through a single lane (below), not per-gap
+            # channels -- skip them here so they don't reserve channel slots.
+            continue
         for hop in hops:
             if abs(hop["y1"] - hop["y2"]) >= 1:
                 risers_by_gap[hop["layer"]].append(hop)
@@ -493,6 +497,14 @@ def _route_edges(positions, ctx, flows, strategy):
 
     bottom_y = max((p["y"] + p["h"] for p in positions.values()), default=0)
 
+    # Lowest real-node edge per layer -- a multi-layer span dips just below the
+    # nodes of the columns it skips, so its lane clears them without diving all
+    # the way under the diagram like a loop does.
+    layer_bottom: dict[int, float] = {}
+    for nid, p in positions.items():
+        lyr = node_layer[nid]
+        layer_bottom[lyr] = max(layer_bottom.get(lyr, p["y"] + p["h"]), p["y"] + p["h"])
+
     def _loop_span(idx):
         src = positions[flows[idx]["source"]]
         tgt = positions[flows[idx]["target"]]
@@ -512,6 +524,33 @@ def _route_edges(positions, ctx, flows, strategy):
     )
     loop_lane = {idx: bottom_y + 50 + k * 45 for k, idx in enumerate(loop_indices)}
 
+    def _span_base(idx):
+        """Y just below the columns a multi-layer span skips (clears their nodes)."""
+        src_l = node_layer[flows[idx]["source"]]
+        tgt_l = node_layer[flows[idx]["target"]]
+        spanned = [
+            layer_bottom[lyr] for lyr in range(src_l + 1, tgt_l) if lyr in layer_bottom
+        ]
+        if spanned:
+            return max(spanned)
+        return max(
+            positions[flows[idx]["source"]]["y"] + positions[flows[idx]["source"]]["h"],
+            positions[flows[idx]["target"]]["y"] + positions[flows[idx]["target"]]["h"],
+        )
+
+    # Lane per multi-layer span; spans that would share a lane stagger downward so
+    # parallel detours never draw on top of one another.
+    multilayer_indices = sorted(
+        (i for i in range(len(flows)) if _routed_forward(i) and len(chains[i]) > 2),
+        key=_span_base,
+    )
+    multilayer_lane: dict[int, float] = {}
+    stack_by_base: dict[float, int] = defaultdict(int)
+    for i in multilayer_indices:
+        base = _span_base(i)
+        multilayer_lane[i] = base + 40 + stack_by_base[base] * 22
+        stack_by_base[base] += 1
+
     routes: dict[int, list] = {}
     for idx, flow in enumerate(flows):
         hop_list = hops_by_flow[idx]
@@ -526,17 +565,28 @@ def _route_edges(positions, ctx, flows, strategy):
                 routes[idx] = []
         elif _routed_forward(idx):
             chain = chains[idx]
-            points = [(_exit_x(chain[0]), centers[chain[0]][1])]
-            for hop in hop_list:
-                target_pt = (_entry_x(hop["b"]), hop["y2"])
-                if abs(hop["y1"] - hop["y2"]) < 1:
-                    points.append(target_pt)
-                else:
-                    channel = hop["channel"]
-                    points.append((channel, hop["y1"]))
-                    points.append((channel, hop["y2"]))
-                    points.append(target_pt)
-            routes[idx] = points
+            if len(chain) > 2:
+                # Multi-layer span: straighten the whole interior into ONE lane
+                # below the columns it skips -- a single horizontal segment --
+                # instead of threading each dummy's slightly different y (which
+                # rendered as a staircase). Same U geometry as a loop lane.
+                routes[idx] = _loop_waypoints(
+                    positions[flow["source"]],
+                    positions[flow["target"]],
+                    multilayer_lane[idx],
+                )
+            else:
+                points = [(_exit_x(chain[0]), centers[chain[0]][1])]
+                for hop in hop_list:
+                    target_pt = (_entry_x(hop["b"]), hop["y2"])
+                    if abs(hop["y1"] - hop["y2"]) < 1:
+                        points.append(target_pt)
+                    else:
+                        channel = hop["channel"]
+                        points.append((channel, hop["y1"]))
+                        points.append((channel, hop["y2"]))
+                        points.append(target_pt)
+                routes[idx] = points
         else:
             routes[idx] = []
     return routes

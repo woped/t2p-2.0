@@ -412,6 +412,37 @@ def test_assign_pnml_coordinates_routes_back_edge_loops():
     assert any(int(p.get("y")) > bottom_y for p in waypoints["a4"])
 
 
+def test_assign_pnml_coordinates_straightens_multi_layer_arc():
+    """A multi-layer (skip) arc must route through ONE horizontal lane, not a
+    staircase of per-dummy bend points. The interior is a single flat segment."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p0'/><transition id='t0'/><place id='p1'/><transition id='t1'/>"
+        "<place id='p2'/><transition id='t2'/><place id='p3'/>"
+        "<arc id='a0' source='p0' target='t0'/><arc id='a1' source='t0' target='p1'/>"
+        "<arc id='a2' source='p1' target='t1'/><arc id='a3' source='t1' target='p2'/>"
+        "<arc id='a4' source='p2' target='t2'/><arc id='a5' source='t2' target='p3'/>"
+        "<arc id='askip' source='p0' target='p3'/>"  # spans 6 layers
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+    skip = next(a for a in root.iter() if a.get("id") == "askip")
+    pts = [
+        (int(p.get("x")), int(p.get("y"))) for p in skip.findall("graphics/position")
+    ]
+
+    # No staircase: a clean U has few points, and the horizontal run sits at a
+    # single y (the lane) rather than drifting through every dummy's height.
+    assert len(pts) <= 4, f"expected a flat lane, got a staircase: {pts}"
+    lane_ys = sorted({y for _, y in pts})
+    assert len(lane_ys) <= 3, f"too many distinct heights for a U: {pts}"
+    # The two deepest points (the lane) share one y and span the width.
+    deepest = max(y for _, y in pts)
+    lane_pts = [x for x, y in pts if y == deepest]
+    assert len(lane_pts) >= 2 and max(lane_pts) - min(lane_pts) > 0
+
+
 def test_assign_pnml_coordinates_passes_through_non_xml():
     """A non-XML payload (e.g. a transformer error string) is returned as-is."""
     assert assign_pnml_coordinates("not xml") == "not xml"
