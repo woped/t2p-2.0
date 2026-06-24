@@ -1,7 +1,7 @@
 import xml.etree.ElementTree as ET
 
 import pytest
-from app.backend.bpmn_writer import laid_out_bpmn
+from app.backend.bpmn_writer import laid_out_bpmn, semantic_bpmn
 from app.backend.pnml_writer import assign_pnml_coordinates
 
 _BPMNDI = "http://www.omg.org/spec/BPMN/20100524/DI"
@@ -60,6 +60,15 @@ def test_laid_out_bpmn_generates_xml(example_data):
     assert "startEvent1" in result
     assert "task1" in result
     assert "endEvent1" in result
+    # <incoming>/<outgoing> are transformer-only and must NOT be in client BPMN.
+    assert "<outgoing>" not in result
+    assert "<incoming>" not in result
+
+
+def test_semantic_bpmn_keeps_flow_references(example_data):
+    # The transformer reads node in/out degree from <incoming>/<outgoing>, so the
+    # semantic (transformer-feeding) BPMN keeps them -- unlike laid_out_bpmn.
+    result = semantic_bpmn(example_data)
     assert "<outgoing>flow1</outgoing>" in result
     assert "<incoming>flow1</incoming>" in result
 

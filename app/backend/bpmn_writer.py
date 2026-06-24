@@ -54,11 +54,12 @@ def _build_semantic_process(model):
         attrib={"id": "Process_1", "isExecutable": "false"},
     )
 
-    semantic_elements = {}
+    node_ids: set[str] = set()
 
     for event in model["events"]:
+        node_ids.add(event["id"])
         event_type = _EVENT_TYPE_MAP.get(event["type"], "intermediateCatchEvent")
-        semantic_elements[event["id"]] = ET.SubElement(
+        ET.SubElement(
             process,
             f"{{{_NS['bpmn']}}}{event_type}",
             id=event["id"],
@@ -66,15 +67,17 @@ def _build_semantic_process(model):
         )
 
     for task in model["tasks"]:
+        node_ids.add(task["id"])
         # Convert task type to camelCase (e.g., UserTask -> userTask).
         task_type = task["type"][0].lower() + task["type"][1:]
-        semantic_elements[task["id"]] = ET.SubElement(
+        ET.SubElement(
             process, f"{{{_NS['bpmn']}}}{task_type}", id=task["id"], name=task["name"]
         )
 
     for gateway in model["gateways"]:
+        node_ids.add(gateway["id"])
         gateway_type = gateway["type"][0].lower() + gateway["type"][1:]
-        semantic_elements[gateway["id"]] = ET.SubElement(
+        ET.SubElement(
             process,
             f"{{{_NS['bpmn']}}}{gateway_type}",
             id=gateway["id"],
@@ -82,15 +85,11 @@ def _build_semantic_process(model):
         )
 
     for flow in model["flows"]:
-        source = semantic_elements[flow["source"]]
-        target = semantic_elements[flow["target"]]
-        # These per-node <incoming>/<outgoing> tags look redundant with the
-        # sequenceFlow's source/target below, but the model-transformer needs
-        # them: its get_in_degree/get_out_degree read the node tags, not the
-        # edges. Without them it does not error -- it silently builds a wrong
-        # net (gateways look degree-0 and get pruned). Do not remove.
-        ET.SubElement(source, f"{{{_NS['bpmn']}}}outgoing").text = flow["id"]
-        ET.SubElement(target, f"{{{_NS['bpmn']}}}incoming").text = flow["id"]
+        # A flow to/from an unknown node is a malformed model; the KeyError is
+        # surfaced as invalid_model by the caller.
+        for endpoint in (flow["source"], flow["target"]):
+            if endpoint not in node_ids:
+                raise KeyError(endpoint)
         ET.SubElement(
             process,
             f"{{{_NS['bpmn']}}}sequenceFlow",
@@ -100,6 +99,23 @@ def _build_semantic_process(model):
         )
 
     return definitions
+
+
+def _add_flow_references(definitions):
+    """Add the redundant per-node ``<incoming>``/``<outgoing>`` refs.
+
+    They duplicate the sequence flows and are pure noise for a BPMN client, but
+    the model-transformer needs them: its in/out-degree reads these node tags,
+    not the edges (without them gateways look degree-0 and get pruned). So they
+    are added only on the transformer-feeding path, never in the laid-out BPMN.
+    """
+    ns = f"{{{_NS['bpmn']}}}"
+    process = definitions.find(f"{ns}process")
+    nodes = {el.get("id"): el for el in process if not el.tag.endswith("sequenceFlow")}
+    for flow in process.findall(f"{ns}sequenceFlow"):
+        fid = flow.get("id")
+        ET.SubElement(nodes[flow.get("sourceRef")], f"{ns}outgoing").text = fid
+        ET.SubElement(nodes[flow.get("targetRef")], f"{ns}incoming").text = fid
 
 
 def _bpmn_node_size(tag):
@@ -231,7 +247,9 @@ def semantic_bpmn(model):
     here would be wasted work -- the PNML is laid out separately downstream.
     """
     _log_conversion("semantic", model)
-    return _serialize_bpmn(_build_semantic_process(model))
+    definitions = _build_semantic_process(model)
+    _add_flow_references(definitions)
+    return _serialize_bpmn(definitions)
 
 
 def laid_out_bpmn(model):
