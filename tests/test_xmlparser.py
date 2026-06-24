@@ -403,3 +403,53 @@ def test_assign_pnml_coordinates_renames_places_and_normalizes_transition_labels
     assert ("P1", "task1") in arcs
     assert ("task1", "P2") in arcs
     assert ("P2", "task2") in arcs
+
+
+def test_assign_pnml_coordinates_enforces_transition_place_adjacency_and_no_orphans():
+    """Transition-to-transition links are bridged by places and isolated nodes
+    are removed from the PNML net."""
+    pnml = (
+        "<pnml><net id='n1'>"
+        "<place id='orphanPlace'/>"
+        "<transition id='t1'/>"
+        "<transition id='t2'/>"
+        "<place id='p3'/>"
+        "<arc id='a1' source='t1' target='t2'/>"
+        "<arc id='a2' source='p3' target='t1'/>"
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+
+    place_ids = {
+        node.get("id")
+        for node in root.iter()
+        if node.tag.split("}")[-1] == "place" and node.get("id")
+    }
+    transition_ids = {
+        node.get("id")
+        for node in root.iter()
+        if node.tag.split("}")[-1] == "transition" and node.get("id")
+    }
+
+    arcs = [
+        (arc.get("source"), arc.get("target"))
+        for arc in root.iter()
+        if arc.tag.split("}")[-1] == "arc"
+    ]
+
+    assert "orphanPlace" not in place_ids
+
+    # No direct transition->transition or place->place arcs should remain.
+    for source, target in arcs:
+        assert not (source in transition_ids and target in transition_ids)
+        assert not (source in place_ids and target in place_ids)
+
+    # Every transition must have a place either before or after it.
+    adjacency = {transition_id: False for transition_id in transition_ids}
+    for source, target in arcs:
+        if source in transition_ids and target in place_ids:
+            adjacency[source] = True
+        if source in place_ids and target in transition_ids:
+            adjacency[target] = True
+    assert all(adjacency.values())

@@ -112,6 +112,124 @@ def _normalize_transition_labels(root, ns_prefix):
             text_el.text = normalized
 
 
+def _sanitize_pnml_graph(root, ns_prefix):
+    """Enforce a bipartite PNML graph and remove orphan places/transitions.
+
+    Rules applied:
+    - Remove arcs with missing/unknown endpoints.
+    - Replace transition->transition arcs with transition->place->transition.
+    - Replace place->place arcs with place->transition->place.
+    - Remove orphan places/transitions (no incident arcs).
+    """
+
+    def _tag(local_name):
+        return f"{ns_prefix}{local_name}"
+
+    net = root.find(f".//{_tag('net')}")
+    if net is None:
+        net = root
+
+    def _collect_node_ids(tag_name):
+        return {
+            node.get("id")
+            for node in root.iter(_tag(tag_name))
+            if isinstance(node.get("id"), str) and node.get("id")
+        }
+
+    place_ids = _collect_node_ids("place")
+    transition_ids = _collect_node_ids("transition")
+
+    used_ids = set(place_ids) | set(transition_ids)
+    used_arc_ids = {
+        arc.get("id")
+        for arc in root.iter(_tag("arc"))
+        if isinstance(arc.get("id"), str) and arc.get("id")
+    }
+
+    def _next_unique(base_id, used_set):
+        candidate = base_id
+        suffix = 2
+        while candidate in used_set:
+            candidate = f"{base_id}_{suffix}"
+            suffix += 1
+        used_set.add(candidate)
+        return candidate
+
+    def _add_place(base_id):
+        place_id = _next_unique(base_id, used_ids)
+        ET.SubElement(net, _tag("place"), id=place_id)
+        place_ids.add(place_id)
+        return place_id
+
+    def _add_transition(base_id):
+        transition_id = _next_unique(base_id, used_ids)
+        transition = ET.SubElement(net, _tag("transition"), id=transition_id)
+        name = ET.SubElement(transition, _tag("name"))
+        text = ET.SubElement(name, _tag("text"))
+        text.text = "silent"
+        transition_ids.add(transition_id)
+        return transition_id
+
+    def _add_arc(source, target):
+        arc_id = _next_unique(f"{source}TO{target}", used_arc_ids)
+        ET.SubElement(net, _tag("arc"), id=arc_id, source=source, target=target)
+
+    def _remove_element(element):
+        for parent in root.iter():
+            for child in list(parent):
+                if child is element:
+                    parent.remove(child)
+                    return
+
+    for arc in list(root.iter(_tag("arc"))):
+        source = arc.get("source")
+        target = arc.get("target")
+        if (
+            not source
+            or not target
+            or source == target
+            or source not in used_ids
+            or target not in used_ids
+        ):
+            _remove_element(arc)
+            continue
+
+        source_is_place = source in place_ids
+        target_is_place = target in place_ids
+        source_is_transition = source in transition_ids
+        target_is_transition = target in transition_ids
+
+        if source_is_transition and target_is_transition:
+            _remove_element(arc)
+            bridge_place = _add_place(f"BRIDGE_PLACE_{source}_TO_{target}")
+            _add_arc(source, bridge_place)
+            _add_arc(bridge_place, target)
+        elif source_is_place and target_is_place:
+            _remove_element(arc)
+            bridge_transition = _add_transition(f"bridgeTransition_{source}_TO_{target}")
+            _add_arc(source, bridge_transition)
+            _add_arc(bridge_transition, target)
+
+    incident_count = {node_id: 0 for node_id in used_ids}
+    for arc in root.iter(_tag("arc")):
+        source = arc.get("source")
+        target = arc.get("target")
+        if source in incident_count:
+            incident_count[source] += 1
+        if target in incident_count:
+            incident_count[target] += 1
+
+    for place in list(root.iter(_tag("place"))):
+        place_id = place.get("id")
+        if place_id and incident_count.get(place_id, 0) == 0:
+            _remove_element(place)
+
+    for transition in list(root.iter(_tag("transition"))):
+        transition_id = transition.get("id")
+        if transition_id and incident_count.get(transition_id, 0) == 0:
+            _remove_element(transition)
+
+
 def _layered_layout(
     elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_offset=50
 ):
@@ -242,6 +360,7 @@ def assign_pnml_coordinates(pnml_xml):
     if ns_prefix:
         ET.register_namespace("", ns_prefix[1:-1])
 
+    _sanitize_pnml_graph(root, ns_prefix)
     _rename_places_and_update_arcs(root, ns_prefix)
     _normalize_transition_labels(root, ns_prefix)
 
