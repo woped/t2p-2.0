@@ -111,17 +111,17 @@ def _legacy_generate(target):
         )
         result = _transform_to_pnml(bpmn_xml) if target == "pnml" else bpmn_xml
         return jsonify({"result": result}), 200
-    except requests.exceptions.RequestException as exc:
+    except requests.exceptions.RequestException:
         status = "500"
-        logger.error("Legacy transformation failed", extra={"error": str(exc)})
+        logger.exception("Legacy transformation failed")
         return jsonify({"error": "BPMN to PNML transformation failed."}), 500
-    except ConnectorError as exc:
+    except ConnectorError:
         status = "500"
-        logger.error("Legacy connector call failed", extra={"error": str(exc)})
+        logger.exception("Legacy connector call failed")
         return jsonify({"error": "LLM API connector error."}), 500
-    except (ConnectorClientError, ValueError) as exc:
+    except (ConnectorClientError, ValueError):
         status = "500"
-        logger.error("Legacy generation failed", extra={"error": str(exc)})
+        logger.exception("Legacy generation failed")
         return jsonify({"error": "Invalid response from LLM API."}), 500
     finally:
         duration = time.time() - start_time
@@ -224,11 +224,11 @@ def _v2_generate(target):
         if target == "pnml":
             try:
                 result = _transform_to_pnml(bpmn_xml)
-            except requests.exceptions.RequestException as e:
+            except requests.exceptions.RequestException:
                 status = "500"
-                logger.error(
+                logger.exception(
                     "BPMN to PNML transformation failed",
-                    extra={"endpoint": endpoint_label, "error": str(e)},
+                    extra={"endpoint": endpoint_label},
                 )
                 return _error_response(
                     500,
@@ -256,11 +256,11 @@ def _v2_generate(target):
             "invalid_request",
             "The request was rejected by the LLM API connector.",
         )
-    except ConnectorError as e:
+    except ConnectorError:
         status = "500"
-        logger.error(
+        logger.exception(
             "Connector call failed",
-            extra={"endpoint": endpoint_label, "error": str(e)},
+            extra={"endpoint": endpoint_label},
         )
         return _error_response(
             500, "upstream_error", "The LLM API connector is unavailable."
