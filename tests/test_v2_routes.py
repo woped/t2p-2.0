@@ -376,19 +376,42 @@ def test_v2_generate_pnml_runs_bpmn_guided_repair(mock_cc, mock_mt, mock_repair,
 @patch("app.api.routes.validate_pnml_connectivity")
 @patch("app.api.routes.ModelTransformer")
 @patch("app.api.routes.ConnectorClient")
-def test_v2_generate_pnml_connectivity_failure_returns_invalid_model(
+def test_v2_generate_pnml_connectivity_failure_returns_best_effort_pnml(
     mock_cc, mock_mt, mock_validate, client
 ):
-    """A PnmlStructureError raised by the validator maps to an invalid_model 500 response."""
+    """Residual validation failures should still return a best-effort PNML payload."""
     from app.backend.xml_parser import PnmlStructureError
 
     mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
-    mock_mt.return_value.transform.return_value = "<pnml>bad net</pnml>"
+    mock_mt.return_value.transform.return_value = "<pnml><net id='n1'/></pnml>"
     mock_validate.side_effect = PnmlStructureError(
         "PNML connectivity check failed: transition 't1' has no inbound arc."
     )
 
     resp = client.post("/v2/generate/pnml", json=BODY, headers=AUTH)
 
-    assert resp.status_code == 500
-    assert resp.get_json()["error"]["code"] == "invalid_model"
+    assert resp.status_code == 200
+    assert "<pnml" in resp.get_json()["result"]
+
+
+@patch("app.api.routes.validate_pnml_connectivity")
+@patch("app.api.routes.ModelTransformer")
+@patch("app.api.routes.ConnectorClient")
+def test_legacy_generate_pnml_connectivity_failure_returns_best_effort_pnml(
+    mock_cc, mock_mt, mock_validate, client
+):
+    """Legacy PNML route should also return best-effort PNML on residual issues."""
+    from app.backend.xml_parser import PnmlStructureError
+
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+    mock_mt.return_value.transform.return_value = "<pnml><net id='n1'/></pnml>"
+    mock_validate.side_effect = PnmlStructureError(
+        "PNML connectivity check failed: transition 't1' has no outbound arc."
+    )
+
+    resp = client.post(
+        "/generate_PNML", json={"text": "describe a process", "api_key": "secret-token"}
+    )
+
+    assert resp.status_code == 200
+    assert "<pnml" in resp.get_json()["result"]

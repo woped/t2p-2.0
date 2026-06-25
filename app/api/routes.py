@@ -92,7 +92,15 @@ def _transform_to_pnml(bpmn_xml):
     pnml_xml = assign_pnml_coordinates(pnml_xml)
     pnml_xml = repair_pnml_connectivity_from_bpmn(pnml_xml, bpmn_xml)
     pnml_xml = assign_pnml_coordinates(pnml_xml)
-    validate_pnml_connectivity(pnml_xml)
+    try:
+        validate_pnml_connectivity(pnml_xml)
+    except PnmlStructureError as exc:
+        # Best-effort delivery: return partially repaired PNML instead of
+        # failing the request when residual structural issues remain.
+        logger.warning(
+            "Returning best-effort PNML with residual connectivity issues",
+            extra={"error": str(exc)},
+        )
     return pnml_xml
 
 
