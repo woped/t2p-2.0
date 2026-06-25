@@ -269,3 +269,91 @@ def test_generate_status_500_is_upstream_not_client_error(mock_post, connector, 
     with app.app_context():
         with pytest.raises(ConnectorError):
             connector.generate("Bearer t", "text", "openai", "gpt-4o")
+
+
+@patch("app.backend.connector_client.time.sleep", return_value=None)
+@patch("app.backend.connector_client.requests.get")
+@patch("app.backend.connector_client.requests.post")
+def test_generate_internal_async_submit_poll_success(
+    mock_post, mock_get, _mock_sleep, connector, app
+):
+    mock_post.return_value.status_code = 202
+    mock_post.return_value.json.return_value = {"job_id": "job-123"}
+
+    running = type("Resp", (), {})()
+    running.status_code = 200
+    running.json = lambda: {"job_id": "job-123", "status": "running"}
+
+    done = type("Resp", (), {})()
+    done.status_code = 200
+    done.json = lambda: {
+        "job_id": "job-123",
+        "status": "succeeded",
+        "result": {"raw_response": "RAW BPMN JSON"},
+    }
+
+    mock_get.side_effect = [running, done]
+
+    with app.app_context():
+        app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = True
+        app.config["CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS"] = 0.001
+        app.config["CONNECTOR_ASYNC_MAX_WAIT_SECONDS"] = 2
+
+        result = connector.generate(
+            authorization="Bearer secret-token",
+            user_text="describe a process",
+            provider="openai",
+            model="gpt-4o",
+        )
+
+    assert result == "RAW BPMN JSON"
+    assert mock_post.call_args.args[0].endswith("/internal/jobs/generate")
+    assert mock_get.call_args.args[0].endswith("/internal/jobs/job-123")
+
+
+@patch("app.backend.connector_client.ConnectorClient._generate_sync")
+@patch("app.backend.connector_client.ConnectorClient._generate_via_internal_async")
+def test_generate_internal_async_connector_error_falls_back_to_sync(
+    mock_async, mock_sync, connector, app
+):
+    mock_async.side_effect = ConnectorError("async down")
+    mock_sync.return_value = "RAW FROM SYNC"
+
+    with app.app_context():
+        app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = True
+        app.config["CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC"] = True
+
+        result = connector.generate(
+            authorization="Bearer secret-token",
+            user_text="describe a process",
+            provider="openai",
+            model="gpt-4o",
+        )
+
+    assert result == "RAW FROM SYNC"
+    mock_async.assert_called_once()
+    mock_sync.assert_called_once()
+
+
+@patch("app.backend.connector_client.ConnectorClient._generate_sync")
+@patch("app.backend.connector_client.ConnectorClient._generate_via_internal_async")
+def test_generate_internal_async_404_falls_back_to_sync(
+    mock_async, mock_sync, connector, app
+):
+    mock_async.side_effect = ConnectorClientError(404, None)
+    mock_sync.return_value = "RAW FROM SYNC"
+
+    with app.app_context():
+        app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = True
+        app.config["CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC"] = True
+
+        result = connector.generate(
+            authorization="Bearer secret-token",
+            user_text="describe a process",
+            provider="openai",
+            model="gpt-4o",
+        )
+
+    assert result == "RAW FROM SYNC"
+    mock_async.assert_called_once()
+    mock_sync.assert_called_once()

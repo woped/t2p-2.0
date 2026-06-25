@@ -1,4 +1,5 @@
 import logging
+import time
 import requests
 from flask import current_app
 
@@ -61,6 +62,61 @@ class ConnectorClient:
         :raises ConnectorError: on connection failure, timeout, non-200, or a
             malformed response body.
         """
+        if current_app.config.get("CONNECTOR_INTERNAL_ASYNC_ENABLED", False):
+            fallback_enabled = current_app.config.get(
+                "CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC", True
+            )
+            try:
+                return self._generate_via_internal_async(
+                    authorization=authorization,
+                    user_text=user_text,
+                    provider=provider,
+                    model=model,
+                    prompting_strategy=prompting_strategy,
+                )
+            except ConnectorClientError as e:
+                # If the internal async endpoint is not available on the
+                # connector yet, degrade to the stable synchronous endpoint.
+                if fallback_enabled and e.status_code in (404, 405):
+                    logger.warning(
+                        "Connector internal async unavailable (%s), falling back to /generate",
+                        e.status_code,
+                    )
+                    return self._generate_sync(
+                        authorization=authorization,
+                        user_text=user_text,
+                        provider=provider,
+                        model=model,
+                        prompting_strategy=prompting_strategy,
+                    )
+                raise
+            except ConnectorError:
+                if fallback_enabled:
+                    logger.warning(
+                        "Connector internal async failed, falling back to /generate",
+                        exc_info=True,
+                    )
+                    return self._generate_sync(
+                        authorization=authorization,
+                        user_text=user_text,
+                        provider=provider,
+                        model=model,
+                        prompting_strategy=prompting_strategy,
+                    )
+                raise
+
+        return self._generate_sync(
+            authorization=authorization,
+            user_text=user_text,
+            provider=provider,
+            model=model,
+            prompting_strategy=prompting_strategy,
+        )
+
+    def _generate_sync(
+        self, authorization, user_text, provider, model, prompting_strategy=None
+    ):
+        """Call the connector's synchronous generate endpoint."""
         url = f"{self.base_url}/generate"
         # Authorization is forwarded verbatim; never log header values.
         headers = {"Authorization": authorization, "Content-Type": "application/json"}
@@ -119,6 +175,98 @@ class ConnectorClient:
                 "LLM API connector response missing 'raw_response' field"
             )
         return raw_response
+
+    def _generate_via_internal_async(
+        self, authorization, user_text, provider, model, prompting_strategy=None
+    ):
+        """Submit to internal async endpoint and poll until terminal state."""
+        submit_url = f"{self.base_url}/internal/jobs/generate"
+        headers = {"Authorization": authorization, "Content-Type": "application/json"}
+        payload = {"user_text": user_text, "provider": provider, "model": model}
+        if prompting_strategy is not None:
+            payload["prompting_strategy"] = prompting_strategy
+
+        try:
+            submit_response = requests.post(
+                submit_url,
+                headers=headers,
+                json=payload,
+                timeout=self.timeout,
+                verify=False,
+            )
+        except requests.exceptions.RequestException as e:
+            logger.exception("Connector internal async submit failed")
+            raise ConnectorError(f"Failed to reach the LLM API connector: {e}") from e
+
+        if 400 <= submit_response.status_code < 500:
+            try:
+                error_body = submit_response.json()
+            except ValueError:
+                error_body = None
+            raise ConnectorClientError(submit_response.status_code, error_body)
+
+        if submit_response.status_code != 202:
+            raise ConnectorError(
+                "LLM API connector internal async submit returned "
+                f"status {submit_response.status_code}"
+            )
+
+        try:
+            submit_data = submit_response.json()
+        except ValueError as e:
+            raise ConnectorError("LLM API connector returned invalid JSON") from e
+
+        job_id = submit_data.get("job_id")
+        if not job_id:
+            raise ConnectorError("LLM API connector async submit missing job_id")
+
+        status_url = f"{self.base_url}/internal/jobs/{job_id}"
+        poll_interval = float(
+            current_app.config.get("CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS", 0.5)
+        )
+        max_wait = float(current_app.config.get("CONNECTOR_ASYNC_MAX_WAIT_SECONDS", 120))
+        deadline = time.time() + max_wait
+
+        while time.time() < deadline:
+            try:
+                status_response = requests.get(
+                    status_url,
+                    timeout=self.timeout,
+                    verify=False,
+                )
+            except requests.exceptions.RequestException as e:
+                logger.exception("Connector internal async status poll failed")
+                raise ConnectorError(
+                    f"Failed to reach the LLM API connector: {e}"
+                ) from e
+
+            if status_response.status_code != 200:
+                raise ConnectorError(
+                    "LLM API connector internal async status returned "
+                    f"status {status_response.status_code}"
+                )
+
+            try:
+                status_data = status_response.json()
+            except ValueError as e:
+                raise ConnectorError("LLM API connector returned invalid JSON") from e
+
+            status = status_data.get("status")
+            if status == "succeeded":
+                result = status_data.get("result") or {}
+                raw_response = result.get("raw_response")
+                if raw_response is None:
+                    raise ConnectorError(
+                        "LLM API connector async result missing 'raw_response'"
+                    )
+                return raw_response
+            if status == "failed":
+                error = status_data.get("error") or {}
+                raise ConnectorError(error.get("message") or "LLM provider call failed")
+
+            time.sleep(poll_interval)
+
+        raise ConnectorError("Timed out waiting for LLM API connector async result")
 
     def list_models(self):
         """Call the connector's ``GET /models`` and return the models list.
