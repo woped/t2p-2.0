@@ -125,6 +125,26 @@ def test_generate_4xx_raises_client_error(mock_post, connector, app):
 
 
 @patch("app.backend.connector_client.requests.post")
+def test_generate_429_raises_client_error_with_rate_limited_body(
+    mock_post, connector, app
+):
+    mock_post.return_value.status_code = 429
+    mock_post.return_value.json.return_value = {
+        "error": {
+            "code": "rate_limited",
+            "message": "Provider quota or rate limit exceeded.",
+        }
+    }
+
+    with app.app_context():
+        with pytest.raises(ConnectorClientError) as exc_info:
+            connector.generate("Bearer t", "text", "openai", "gpt-4o")
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.error_body["error"]["code"] == "rate_limited"
+
+
+@patch("app.backend.connector_client.requests.post")
 def test_generate_request_exception_raises(mock_post, connector, app):
     from requests.exceptions import RequestException
 

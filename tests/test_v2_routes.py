@@ -174,6 +174,24 @@ def test_v2_generate_relays_connector_4xx(mock_cc, client):
 
 
 @patch("app.api.routes.ConnectorClient")
+def test_v2_generate_relays_connector_429(mock_cc, client):
+    mock_cc.return_value.generate.side_effect = ConnectorClientError(
+        429,
+        {
+            "error": {
+                "code": "rate_limited",
+                "message": "Provider quota or rate limit exceeded.",
+            }
+        },
+    )
+
+    resp = client.post("/v2/generate/bpmn", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 429
+    assert resp.get_json()["error"]["code"] == "rate_limited"
+
+
+@patch("app.api.routes.ConnectorClient")
 def test_v2_generate_relays_4xx_status_when_error_body_is_malformed(mock_cc, client):
     # The connector returned a 4xx but its body is not the expected
     # {"error": {...}} shape. The status is still relayed, with a synthesized
