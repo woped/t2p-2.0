@@ -51,6 +51,8 @@ To set up the local environment without docker, use these commands:
   ```
   (`.flaskenv` already sets `FLASK_APP=flasky.py`, so a bare `flask run` works
   too.)
+  Default local URL is `http://127.0.0.1:5000` (from `.flaskenv` via
+  `FLASK_RUN_PORT`).
 
 #### Running the Project as docker image
 

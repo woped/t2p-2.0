@@ -10,9 +10,9 @@ SECRET_KEY=dev-secret-key-change-in-production
 TRANSFORMER_BASE_URL=https://woped.dhbw-karlsruhe.de/pnml-bpmn-transformer
 LLM_API_CONNECTOR_URL=https://woped.dhbw-karlsruhe.de/llm-api-connector
 
-# Server configuration
-FLASK_PORT=5000
-FLASK_HOST=127.0.0.1
+# Server configuration for local Flask CLI
+FLASK_RUN_PORT=5000
+FLASK_RUN_HOST=127.0.0.1
 
 # Security
 WTF_CSRF_ENABLED=False
