@@ -9,6 +9,7 @@ SECRET_KEY=dev-secret-key-change-in-production
 # External service URLs
 TRANSFORMER_BASE_URL=https://woped.dhbw-karlsruhe.de/pnml-bpmn-transformer
 LLM_API_CONNECTOR_URL=http://127.0.0.1:5001
+CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS=5
 
 # Server configuration for local Flask CLI
 FLASK_RUN_PORT=5000

@@ -26,7 +26,7 @@ class Config:
         in {"1", "true", "yes", "on"}
     )
     CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS = float(
-        os.environ.get("CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS") or 0.5
+        os.environ.get("CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS") or 5.0
     )
     CONNECTOR_ASYNC_MAX_WAIT_SECONDS = float(
         os.environ.get("CONNECTOR_ASYNC_MAX_WAIT_SECONDS") or 120
