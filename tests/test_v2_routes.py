@@ -358,6 +358,21 @@ def test_v2_generate_pnml_runs_connectivity_validation(mock_cc, mock_mt, mock_va
     mock_validate.assert_called_once()
 
 
+@patch("app.api.routes.repair_pnml_connectivity_from_bpmn")
+@patch("app.api.routes.ModelTransformer")
+@patch("app.api.routes.ConnectorClient")
+def test_v2_generate_pnml_runs_bpmn_guided_repair(mock_cc, mock_mt, mock_repair, client):
+    """The PNML pipeline repairs connectivity using BPMN before final validation."""
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+    mock_mt.return_value.transform.return_value = "<pnml><net id='n1'/></pnml>"
+    mock_repair.side_effect = lambda pnml_xml, _bpmn_xml: pnml_xml
+
+    resp = client.post("/v2/generate/pnml", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 200
+    mock_repair.assert_called_once()
+
+
 @patch("app.api.routes.validate_pnml_connectivity")
 @patch("app.api.routes.ModelTransformer")
 @patch("app.api.routes.ConnectorClient")

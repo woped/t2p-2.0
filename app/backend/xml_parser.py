@@ -54,6 +54,171 @@ class PnmlStructureError(ValueError):
     """
 
 
+def repair_pnml_connectivity_from_bpmn(pnml_xml, bpmn_xml):
+    """Repair PNML transition connectivity using BPMN sequence-flow intent.
+
+    The transformer occasionally returns a PNML where one or more transitions
+    are missing inbound or outbound arcs. This function compares the PNML graph
+    against the original BPMN sequence flows and injects missing place/arc
+    structures so each BPMN edge is representable in PNML.
+
+    Repair strategy:
+    - For BPMN flow A -> B where both A and B exist as PNML transitions,
+      ensure a PNML relay A -> place -> B exists.
+    - For BPMN flow A -> X where only A is a PNML transition,
+      ensure at least one outbound A -> place anchor exists for that BPMN edge.
+    - For BPMN flow X -> B where only B is a PNML transition,
+      ensure at least one inbound place -> B anchor exists for that BPMN edge.
+
+    Args:
+        pnml_xml: PNML XML string to repair.
+        bpmn_xml: Source BPMN XML string to infer expected connectivity.
+
+    Returns:
+        Repaired PNML XML string. If parsing fails, returns the input PNML.
+    """
+    if not isinstance(pnml_xml, str) or not pnml_xml:
+        return pnml_xml
+    if not isinstance(bpmn_xml, str) or not bpmn_xml:
+        return pnml_xml
+
+    try:
+        pnml_root = ET.fromstring(pnml_xml)
+    except ET.ParseError:
+        return pnml_xml
+
+    try:
+        bpmn_root = ET.fromstring(bpmn_xml)
+    except ET.ParseError:
+        return pnml_xml
+
+    pnml_raw_tag = pnml_root.tag
+    pnml_ns_prefix = (
+        "{" + pnml_raw_tag[1 : pnml_raw_tag.index("}")] + "}"
+        if pnml_raw_tag.startswith("{")
+        else ""
+    )
+
+    if pnml_ns_prefix:
+        ET.register_namespace("", pnml_ns_prefix[1:-1])
+
+    def _pnml_tag(local_name):
+        return f"{pnml_ns_prefix}{local_name}"
+
+    net = pnml_root.find(f".//{_pnml_tag('net')}")
+    if net is None:
+        net = pnml_root
+
+    transition_ids = {
+        t.get("id")
+        for t in pnml_root.iter(_pnml_tag("transition"))
+        if t.get("id")
+    }
+    place_ids = {
+        p.get("id") for p in pnml_root.iter(_pnml_tag("place")) if p.get("id")
+    }
+
+    if not transition_ids:
+        return pnml_xml
+
+    arc_elements = list(pnml_root.iter(_pnml_tag("arc")))
+    used_ids = set(transition_ids) | set(place_ids)
+    used_arc_ids = {
+        arc.get("id")
+        for arc in arc_elements
+        if isinstance(arc.get("id"), str) and arc.get("id")
+    }
+
+    def _next_unique(base_id, used_set):
+        candidate = base_id
+        suffix = 2
+        while candidate in used_set:
+            candidate = f"{base_id}_{suffix}"
+            suffix += 1
+        used_set.add(candidate)
+        return candidate
+
+    outgoing_places = {}
+    incoming_places = {}
+    for arc in arc_elements:
+        source = arc.get("source")
+        target = arc.get("target")
+        if source in transition_ids and target in place_ids:
+            outgoing_places.setdefault(source, set()).add(target)
+        if source in place_ids and target in transition_ids:
+            incoming_places.setdefault(target, set()).add(source)
+
+    relay_pairs = set()
+    for transition_id, out_places in outgoing_places.items():
+        for place_id in out_places:
+            for target_transition in (
+                t
+                for t in transition_ids
+                if place_id in incoming_places.get(t, set())
+            ):
+                relay_pairs.add((transition_id, target_transition))
+
+    def _add_place(base_id):
+        place_id = _next_unique(base_id, used_ids)
+        ET.SubElement(net, _pnml_tag("place"), id=place_id)
+        place_ids.add(place_id)
+        return place_id
+
+    def _add_arc(source, target):
+        arc_id = _next_unique(f"{source}TO{target}", used_arc_ids)
+        ET.SubElement(net, _pnml_tag("arc"), id=arc_id, source=source, target=target)
+
+    def _ensure_relay(src_transition, tgt_transition, flow_id):
+        if (src_transition, tgt_transition) in relay_pairs:
+            return
+        bridge_place = _add_place(
+            f"REPAIR_PLACE_{src_transition}_TO_{tgt_transition}_{flow_id}"
+        )
+        _add_arc(src_transition, bridge_place)
+        _add_arc(bridge_place, tgt_transition)
+        relay_pairs.add((src_transition, tgt_transition))
+        outgoing_places.setdefault(src_transition, set()).add(bridge_place)
+        incoming_places.setdefault(tgt_transition, set()).add(bridge_place)
+
+    def _ensure_outbound_anchor(src_transition, flow_id):
+        anchors = outgoing_places.get(src_transition, set())
+        if anchors:
+            return
+        bridge_place = _add_place(f"REPAIR_OUT_{src_transition}_{flow_id}")
+        _add_arc(src_transition, bridge_place)
+        outgoing_places.setdefault(src_transition, set()).add(bridge_place)
+
+    def _ensure_inbound_anchor(tgt_transition, flow_id):
+        anchors = incoming_places.get(tgt_transition, set())
+        if anchors:
+            return
+        bridge_place = _add_place(f"REPAIR_IN_{flow_id}_TO_{tgt_transition}")
+        _add_arc(bridge_place, tgt_transition)
+        incoming_places.setdefault(tgt_transition, set()).add(bridge_place)
+
+    bpmn_ns = {"bpmn": _NS["bpmn"]}
+    flows = bpmn_root.findall(".//bpmn:sequenceFlow", bpmn_ns)
+    for index, flow in enumerate(flows, start=1):
+        flow_id = flow.get("id") or f"flow{index}"
+        source = flow.get("sourceRef")
+        target = flow.get("targetRef")
+        if not source or not target:
+            continue
+
+        src_is_transition = source in transition_ids
+        tgt_is_transition = target in transition_ids
+
+        if src_is_transition and tgt_is_transition:
+            _ensure_relay(source, target, flow_id)
+        elif src_is_transition:
+            _ensure_outbound_anchor(source, flow_id)
+        elif tgt_is_transition:
+            _ensure_inbound_anchor(target, flow_id)
+
+    ET.indent(ET.ElementTree(pnml_root), space="  ", level=0)
+    return ET.tostring(pnml_root, encoding="unicode")
+
+
 def validate_pnml_connectivity(pnml_xml):
     """Validate PNML structural connectivity constraints on transitions.
 

@@ -5,6 +5,7 @@ from app.backend.xml_parser import (
     assign_pnml_coordinates,
     json_to_bpmn,
     PnmlStructureError,
+    repair_pnml_connectivity_from_bpmn,
     validate_pnml_connectivity,
 )
 
@@ -557,3 +558,77 @@ def test_validate_pnml_connectivity_pnml_structure_error_is_value_error():
     pnml = _simple_pnml([("t_sink", ["p_in"], [])])
     with pytest.raises(ValueError):
         validate_pnml_connectivity(pnml)
+
+
+# ---------------------------------------------------------------------------
+# repair_pnml_connectivity_from_bpmn
+# ---------------------------------------------------------------------------
+
+
+def test_repair_pnml_connectivity_from_bpmn_adds_missing_transition_relay():
+    """When BPMN expects t1 -> t2, repair injects a PNML relay place/arc path."""
+    bpmn = (
+        "<?xml version='1.0' encoding='UTF-8'?>"
+        "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'>"
+        "<process id='p1'>"
+        "<sequenceFlow id='f1' sourceRef='t1' targetRef='t2'/>"
+        "</process></definitions>"
+    )
+    pnml = (
+        "<pnml><net id='n1'>"
+        "<transition id='t1'/><transition id='t2'/>"
+        "<place id='p_in'/><place id='p_out'/>"
+        "<arc id='a1' source='p_in' target='t1'/>"
+        "<arc id='a2' source='t2' target='p_out'/>"
+        "</net></pnml>"
+    )
+
+    repaired = repair_pnml_connectivity_from_bpmn(pnml, bpmn)
+    validate_pnml_connectivity(repaired)
+
+    root = ET.fromstring(repaired)
+    arcs = [
+        (arc.get("source"), arc.get("target"))
+        for arc in root.iter()
+        if arc.tag.split("}")[-1] == "arc"
+    ]
+    places = {
+        p.get("id")
+        for p in root.iter()
+        if p.tag.split("}")[-1] == "place" and p.get("id")
+    }
+
+    # There must be at least one relay place such that t1->place and place->t2.
+    assert any(src == "t1" and tgt in places for src, tgt in arcs)
+    assert any(src in places and tgt == "t2" for src, tgt in arcs)
+
+
+def test_repair_pnml_connectivity_from_bpmn_adds_anchors_for_event_side_flows():
+    """Flows from/to non-transition BPMN nodes still create missing in/out anchors."""
+    bpmn = (
+        "<?xml version='1.0' encoding='UTF-8'?>"
+        "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'>"
+        "<process id='p1'>"
+        "<sequenceFlow id='f_in' sourceRef='startEvent1' targetRef='task1'/>"
+        "<sequenceFlow id='f_out' sourceRef='task1' targetRef='endEvent1'/>"
+        "</process></definitions>"
+    )
+    pnml = "<pnml><net id='n1'><transition id='task1'/></net></pnml>"
+
+    repaired = repair_pnml_connectivity_from_bpmn(pnml, bpmn)
+    validate_pnml_connectivity(repaired)
+
+    root = ET.fromstring(repaired)
+    inbound = 0
+    outbound = 0
+    for arc in root.iter():
+        if arc.tag.split("}")[-1] != "arc":
+            continue
+        source = arc.get("source")
+        target = arc.get("target")
+        if target == "task1":
+            inbound += 1
+        if source == "task1":
+            outbound += 1
+    assert inbound >= 1
+    assert outbound >= 1
