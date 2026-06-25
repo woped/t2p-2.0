@@ -339,3 +339,41 @@ def test_legacy_pnml_uses_new_flow_and_preserves_response(mock_cc, mock_mt, clie
     assert resp.status_code == 200
     assert resp.get_json() == {"result": "<pnml>legacy</pnml>"}
     mock_mt.return_value.transform.assert_called_once()
+
+
+# --- PNML connectivity validation -----------------------------------------
+
+
+@patch("app.api.routes.validate_pnml_connectivity")
+@patch("app.api.routes.ModelTransformer")
+@patch("app.api.routes.ConnectorClient")
+def test_v2_generate_pnml_runs_connectivity_validation(mock_cc, mock_mt, mock_validate, client):
+    """validate_pnml_connectivity is called on the PNML returned by the transformer."""
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+    mock_mt.return_value.transform.return_value = "<pnml>some net</pnml>"
+
+    resp = client.post("/v2/generate/pnml", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 200
+    mock_validate.assert_called_once()
+
+
+@patch("app.api.routes.validate_pnml_connectivity")
+@patch("app.api.routes.ModelTransformer")
+@patch("app.api.routes.ConnectorClient")
+def test_v2_generate_pnml_connectivity_failure_returns_invalid_model(
+    mock_cc, mock_mt, mock_validate, client
+):
+    """A PnmlStructureError raised by the validator maps to an invalid_model 500 response."""
+    from app.backend.xml_parser import PnmlStructureError
+
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+    mock_mt.return_value.transform.return_value = "<pnml>bad net</pnml>"
+    mock_validate.side_effect = PnmlStructureError(
+        "PNML connectivity check failed: transition 't1' has no inbound arc."
+    )
+
+    resp = client.post("/v2/generate/pnml", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 500
+    assert resp.get_json()["error"]["code"] == "invalid_model"

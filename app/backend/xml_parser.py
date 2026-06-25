@@ -45,6 +45,77 @@ _WS_RE = re.compile(r"\s+")
 _PUNCT_RE = re.compile(r"[^a-z0-9\-\s]")
 
 
+class PnmlStructureError(ValueError):
+    """A PNML net violates structural connectivity constraints.
+
+    Raised when a transition lacks inbound or outbound arcs after the
+    BPMN-to-PNML transformation.  Subclasses ``ValueError`` so existing
+    ``ValueError`` handlers keep catching it.
+    """
+
+
+def validate_pnml_connectivity(pnml_xml):
+    """Validate PNML structural connectivity constraints on transitions.
+
+    After BPMN-to-PNML transformation every transition must have at least one
+    inbound arc (a place flows *into* it) and at least one outbound arc (it
+    flows *into* a place).  The arc counts convey the gateway role:
+
+    - Exactly 1 inbound + 1 outbound  →  regular transition (task).
+    - 1 inbound + N outbound (N > 1)  →  split gateway.
+    - N inbound (N > 1) + 1 outbound  →  join gateway.
+
+    A missing inbound or outbound arc is always an error regardless of role.
+
+    Args:
+        pnml_xml: PNML XML string to validate.
+
+    Raises:
+        PnmlStructureError: if any transition lacks an inbound or outbound arc.
+    """
+    if not pnml_xml or not isinstance(pnml_xml, str):
+        return
+
+    try:
+        root = ET.fromstring(pnml_xml)
+    except ET.ParseError:
+        return  # structural parse errors are handled elsewhere
+
+    raw_tag = root.tag
+    ns_prefix = (
+        "{" + raw_tag[1 : raw_tag.index("}")] + "}" if raw_tag.startswith("{") else ""
+    )
+
+    transition_ids = {
+        t.get("id")
+        for t in root.iter(f"{ns_prefix}transition")
+        if t.get("id")
+    }
+
+    inbound: dict = {tid: 0 for tid in transition_ids}
+    outbound: dict = {tid: 0 for tid in transition_ids}
+
+    for arc in root.iter(f"{ns_prefix}arc"):
+        source = arc.get("source")
+        target = arc.get("target")
+        if target in transition_ids:
+            inbound[target] += 1
+        if source in transition_ids:
+            outbound[source] += 1
+
+    violations = []
+    for tid in sorted(transition_ids):
+        if inbound[tid] == 0:
+            violations.append(f"transition '{tid}' has no inbound arc")
+        if outbound[tid] == 0:
+            violations.append(f"transition '{tid}' has no outbound arc")
+
+    if violations:
+        raise PnmlStructureError(
+            "PNML connectivity check failed: " + "; ".join(violations) + "."
+        )
+
+
 def _normalize_transition_label(text):
     """Normalize transition label text to a plain infinitive-style phrase.
 

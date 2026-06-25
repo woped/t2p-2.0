@@ -17,7 +17,7 @@ from app.backend.connector_client import (
     ConnectorError,
 )
 from app.backend.modeltransformer import ModelTransformer
-from app.backend.xml_parser import assign_pnml_coordinates
+from app.backend.xml_parser import assign_pnml_coordinates, PnmlStructureError, validate_pnml_connectivity
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
@@ -84,7 +84,9 @@ def _transform_to_pnml(bpmn_xml):
     # negligible next to the LLM call and transformer round-trip. Avoiding it
     # would mean emitting layout-free BPMN, which the transformer may reject.
     pnml_xml = ModelTransformer().transform(bpmn_xml, {"direction": "bpmntopnml"})
-    return assign_pnml_coordinates(pnml_xml)
+    pnml_xml = assign_pnml_coordinates(pnml_xml)
+    validate_pnml_connectivity(pnml_xml)
+    return pnml_xml
 
 
 def _legacy_generate(target):
@@ -265,7 +267,7 @@ def _v2_generate(target):
         return _error_response(
             500, "upstream_error", "The LLM API connector is unavailable."
         )
-    except InvalidModelError as e:
+    except (InvalidModelError, PnmlStructureError) as e:
         status = "500"
         logger.warning(
             "Connector returned an invalid process model",

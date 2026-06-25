@@ -1,7 +1,12 @@
 import xml.etree.ElementTree as ET
 
 import pytest
-from app.backend.xml_parser import assign_pnml_coordinates, json_to_bpmn
+from app.backend.xml_parser import (
+    assign_pnml_coordinates,
+    json_to_bpmn,
+    PnmlStructureError,
+    validate_pnml_connectivity,
+)
 
 _BPMNDI = "http://www.omg.org/spec/BPMN/20100524/DI"
 
@@ -453,3 +458,102 @@ def test_assign_pnml_coordinates_enforces_transition_place_adjacency_and_no_orph
         if source in place_ids and target in transition_ids:
             adjacency[target] = True
     assert all(adjacency.values())
+
+
+# ---------------------------------------------------------------------------
+# validate_pnml_connectivity
+# ---------------------------------------------------------------------------
+
+
+def _simple_pnml(transitions_and_arcs):
+    """Build a minimal PNML string from a list of (id, [inbound places], [outbound places])
+    tuples so individual validator tests need not repeat boilerplate."""
+    parts = ["<pnml><net id='n1'>"]
+    places = set()
+    for tid, ins, outs in transitions_and_arcs:
+        parts.append(f"<transition id='{tid}'/>")
+        places.update(ins)
+        places.update(outs)
+    for pid in sorted(places):
+        parts.append(f"<place id='{pid}'/>")
+    arc_id = 0
+    for tid, ins, outs in transitions_and_arcs:
+        for pid in ins:
+            parts.append(f"<arc id='a{arc_id}' source='{pid}' target='{tid}'/>")
+            arc_id += 1
+        for pid in outs:
+            parts.append(f"<arc id='a{arc_id}' source='{tid}' target='{pid}'/>")
+            arc_id += 1
+    parts.append("</net></pnml>")
+    return "".join(parts)
+
+
+def test_validate_pnml_connectivity_accepts_regular_transition():
+    """A transition with exactly one inbound and one outbound arc is valid."""
+    pnml = _simple_pnml([("t1", ["p_in"], ["p_out"])])
+    validate_pnml_connectivity(pnml)  # must not raise
+
+
+def test_validate_pnml_connectivity_accepts_split_gateway():
+    """A split gateway transition (one inbound, multiple outbound) is valid."""
+    pnml = _simple_pnml([("split", ["p_in"], ["p_out1", "p_out2"])])
+    validate_pnml_connectivity(pnml)  # must not raise
+
+
+def test_validate_pnml_connectivity_accepts_join_gateway():
+    """A join gateway transition (multiple inbound, one outbound) is valid."""
+    pnml = _simple_pnml([("join", ["p_in1", "p_in2"], ["p_out"])])
+    validate_pnml_connectivity(pnml)  # must not raise
+
+
+def test_validate_pnml_connectivity_rejects_transition_without_inbound():
+    """A transition with no inbound arc violates the connectivity constraint."""
+    pnml = _simple_pnml([("t_source", [], ["p_out"])])
+    with pytest.raises(PnmlStructureError, match="no inbound arc"):
+        validate_pnml_connectivity(pnml)
+
+
+def test_validate_pnml_connectivity_rejects_transition_without_outbound():
+    """A transition with no outbound arc violates the connectivity constraint."""
+    pnml = _simple_pnml([("t_sink", ["p_in"], [])])
+    with pytest.raises(PnmlStructureError, match="no outbound arc"):
+        validate_pnml_connectivity(pnml)
+
+
+def test_validate_pnml_connectivity_rejects_isolated_transition():
+    """A transition with neither inbound nor outbound arcs must raise once per direction."""
+    pnml = "<pnml><net id='n1'><transition id='isolated'/></net></pnml>"
+    with pytest.raises(PnmlStructureError) as exc_info:
+        validate_pnml_connectivity(pnml)
+    msg = str(exc_info.value)
+    assert "no inbound arc" in msg
+    assert "no outbound arc" in msg
+
+
+def test_validate_pnml_connectivity_reports_all_violations():
+    """When multiple transitions violate constraints all are reported in one error."""
+    pnml = _simple_pnml([
+        ("t_ok", ["p_in"], ["p_out"]),
+        ("t_no_in", [], ["p_mid"]),
+        ("t_no_out", ["p_mid"], []),
+    ])
+    with pytest.raises(PnmlStructureError) as exc_info:
+        validate_pnml_connectivity(pnml)
+    msg = str(exc_info.value)
+    assert "t_no_in" in msg
+    assert "t_no_out" in msg
+    assert "t_ok" not in msg
+
+
+def test_validate_pnml_connectivity_is_noop_for_empty_or_non_xml():
+    """Falsy or non-XML inputs are silently accepted; the caller guards the contract."""
+    validate_pnml_connectivity("")
+    validate_pnml_connectivity(None)
+    validate_pnml_connectivity("not xml at all")
+
+
+def test_validate_pnml_connectivity_pnml_structure_error_is_value_error():
+    """PnmlStructureError must be a ValueError subclass for existing handlers."""
+    pnml = _simple_pnml([("t_sink", ["p_in"], [])])
+    with pytest.raises(ValueError):
+        validate_pnml_connectivity(pnml)
