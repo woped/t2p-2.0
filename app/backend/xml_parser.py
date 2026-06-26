@@ -219,6 +219,132 @@ def repair_pnml_connectivity_from_bpmn(pnml_xml, bpmn_xml):
     return ET.tostring(pnml_root, encoding="unicode")
 
 
+def sanitize_bpmn_for_transform(bpmn_xml):
+    """Remove duplicate BPMN sequence flows before transformer handoff.
+
+    Some model outputs contain duplicate sequence flows with different ids but
+    the same sourceRef/targetRef pair. The BPMN->PNML transformer may reject
+    this shape. This sanitizer keeps the first flow per (source,target) pair
+    and removes duplicate semantic flows and their BPMN DI edges.
+    """
+    if not isinstance(bpmn_xml, str) or not bpmn_xml:
+        return bpmn_xml
+
+    try:
+        root = ET.fromstring(bpmn_xml)
+    except ET.ParseError:
+        return bpmn_xml
+
+    ns = {"bpmn": _NS["bpmn"], "bpmndi": _NS["bpmndi"]}
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+
+    seen_pairs = set()
+    removed_flow_ids = set()
+
+    for flow in root.findall(".//bpmn:sequenceFlow", ns):
+        source = flow.get("sourceRef")
+        target = flow.get("targetRef")
+        if not source or not target:
+            continue
+        pair = (source, target)
+        if pair in seen_pairs:
+            flow_id = flow.get("id")
+            if flow_id:
+                removed_flow_ids.add(flow_id)
+            parent = parent_map.get(flow)
+            if parent is not None:
+                parent.remove(flow)
+            continue
+        seen_pairs.add(pair)
+
+    def _remove_di_edges_for_flow_ids(flow_ids):
+        if not flow_ids:
+            return
+        local_parent_map = {child: parent for parent in root.iter() for child in parent}
+        for edge in root.findall(".//bpmndi:BPMNEdge", ns):
+            if edge.get("bpmnElement") not in flow_ids:
+                continue
+            parent = local_parent_map.get(edge)
+            if parent is not None:
+                parent.remove(edge)
+
+    if removed_flow_ids:
+        _remove_di_edges_for_flow_ids(removed_flow_ids)
+
+    # Collapse gateway passthroughs (exactly 1 inbound and 1 outbound flow).
+    # These add no routing semantics and can trigger transformer-side failures.
+    process = root.find(".//bpmn:process", ns)
+    if process is not None:
+        changed = True
+        while changed:
+            changed = False
+            children = list(process)
+            seq_flows = [el for el in children if el.tag.endswith("sequenceFlow")]
+            gateways = [
+                el
+                for el in children
+                if el.tag.endswith("exclusiveGateway") or el.tag.endswith("parallelGateway")
+            ]
+
+            flow_ids = {f.get("id") for f in seq_flows if f.get("id")}
+
+            for gateway in gateways:
+                gid = gateway.get("id")
+                if not gid:
+                    continue
+
+                inbound = [f for f in seq_flows if f.get("targetRef") == gid]
+                outbound = [f for f in seq_flows if f.get("sourceRef") == gid]
+                if len(inbound) != 1 or len(outbound) != 1:
+                    continue
+
+                in_flow = inbound[0]
+                out_flow = outbound[0]
+                src = in_flow.get("sourceRef")
+                tgt = out_flow.get("targetRef")
+                if not src or not tgt or src == tgt:
+                    continue
+
+                # Reuse the inbound flow id when possible to keep IDs stable.
+                new_flow_id = in_flow.get("id") or f"flow_{src}_to_{tgt}"
+                if new_flow_id in flow_ids and new_flow_id != in_flow.get("id"):
+                    suffix = 2
+                    base = new_flow_id
+                    while f"{base}_{suffix}" in flow_ids:
+                        suffix += 1
+                    new_flow_id = f"{base}_{suffix}"
+
+                # Remove old flows and gateway.
+                process.remove(in_flow)
+                process.remove(out_flow)
+                process.remove(gateway)
+
+                # Insert direct flow replacement.
+                ET.SubElement(
+                    process,
+                    f"{{{_NS['bpmn']}}}sequenceFlow",
+                    attrib={"id": new_flow_id, "sourceRef": src, "targetRef": tgt},
+                )
+
+                # Remove DI edges for old flows and shape for removed gateway.
+                removed = {fid for fid in (in_flow.get("id"), out_flow.get("id")) if fid}
+                _remove_di_edges_for_flow_ids(removed)
+
+                local_parent_map = {child: parent for parent in root.iter() for child in parent}
+                for shape in root.findall(".//bpmndi:BPMNShape", ns):
+                    if shape.get("bpmnElement") != gid:
+                        continue
+                    parent = local_parent_map.get(shape)
+                    if parent is not None:
+                        parent.remove(shape)
+
+                changed = True
+                break
+
+    ET.indent(ET.ElementTree(root), space="  ", level=0)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+
+
 def validate_pnml_connectivity(pnml_xml):
     """Validate PNML structural connectivity constraints on transitions.
 

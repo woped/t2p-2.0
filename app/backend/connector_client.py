@@ -90,20 +90,6 @@ class ConnectorClient:
                         prompting_strategy=prompting_strategy,
                     )
                 raise
-            except ConnectorError:
-                if fallback_enabled:
-                    logger.warning(
-                        "Connector internal async failed, falling back to /generate",
-                        exc_info=True,
-                    )
-                    return self._generate_sync(
-                        authorization=authorization,
-                        user_text=user_text,
-                        provider=provider,
-                        model=model,
-                        prompting_strategy=prompting_strategy,
-                    )
-                raise
 
         return self._generate_sync(
             authorization=authorization,
@@ -228,10 +214,14 @@ class ConnectorClient:
         deadline = time.time() + max_wait
 
         while time.time() < deadline:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+
             try:
                 status_response = requests.get(
                     status_url,
-                    timeout=self.timeout,
+                    timeout=min(self.timeout, max(1.0, remaining)),
                     verify=False,
                 )
             except requests.exceptions.RequestException as e:
@@ -239,6 +229,13 @@ class ConnectorClient:
                 raise ConnectorError(
                     f"Failed to reach the LLM API connector: {e}"
                 ) from e
+
+            if 400 <= status_response.status_code < 500:
+                try:
+                    error_body = status_response.json()
+                except ValueError:
+                    error_body = None
+                raise ConnectorClientError(status_response.status_code, error_body)
 
             if status_response.status_code != 200:
                 raise ConnectorError(

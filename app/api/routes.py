@@ -21,6 +21,7 @@ from app.backend.xml_parser import (
     PnmlStructureError,
     assign_pnml_coordinates,
     repair_pnml_connectivity_from_bpmn,
+    sanitize_bpmn_for_transform,
     validate_pnml_connectivity,
 )
 
@@ -83,6 +84,7 @@ def _generate_bpmn(authorization, text, provider, model, prompting_strategy=None
 
 
 def _transform_to_pnml(bpmn_xml):
+    bpmn_xml = sanitize_bpmn_for_transform(bpmn_xml)
     # The incoming BPMN already carries a layout, but the transformer discards
     # it and we recompute coordinates on the PNML below. That double layout is
     # intentional: both paths reuse the same BPMN builder, and the cost is
@@ -242,16 +244,43 @@ def _v2_generate(target):
             try:
                 result = _transform_to_pnml(bpmn_xml)
             except requests.exceptions.RequestException:
-                status = "500"
-                logger.exception(
-                    "BPMN to PNML transformation failed",
-                    extra={"endpoint": endpoint_label},
-                )
-                return _error_response(
-                    500,
-                    "transform_error",
-                    "The BPMN to PNML transformation service failed.",
-                )
+                prompting_strategy = data.get("prompting_strategy")
+                if prompting_strategy == "few_shot":
+                    logger.warning(
+                        "Few-shot BPMN failed PNML transform, retrying with zero_shot",
+                        extra={"endpoint": endpoint_label},
+                    )
+                    try:
+                        fallback_bpmn_xml = _generate_bpmn(
+                            authorization=authorization,
+                            text=data.get("text"),
+                            provider=data.get("provider"),
+                            model=data.get("model"),
+                            prompting_strategy="zero_shot",
+                        )
+                        result = _transform_to_pnml(fallback_bpmn_xml)
+                    except requests.exceptions.RequestException:
+                        status = "500"
+                        logger.exception(
+                            "BPMN to PNML transformation failed (few_shot + zero_shot fallback)",
+                            extra={"endpoint": endpoint_label},
+                        )
+                        return _error_response(
+                            500,
+                            "transform_error",
+                            "The BPMN to PNML transformation service failed.",
+                        )
+                else:
+                    status = "500"
+                    logger.exception(
+                        "BPMN to PNML transformation failed",
+                        extra={"endpoint": endpoint_label},
+                    )
+                    return _error_response(
+                        500,
+                        "transform_error",
+                        "The BPMN to PNML transformation service failed.",
+                    )
         else:
             result = bpmn_xml
 
@@ -273,15 +302,14 @@ def _v2_generate(target):
             "invalid_request",
             "The request was rejected by the LLM API connector.",
         )
-    except ConnectorError:
+    except ConnectorError as e:
         status = "500"
         logger.exception(
             "Connector call failed",
             extra={"endpoint": endpoint_label},
         )
-        return _error_response(
-            500, "upstream_error", "The LLM API connector is unavailable."
-        )
+        detail = str(e) if str(e) else "The LLM API connector is unavailable."
+        return _error_response(500, "upstream_error", detail)
     except (InvalidModelError, PnmlStructureError) as e:
         status = "500"
         logger.warning(

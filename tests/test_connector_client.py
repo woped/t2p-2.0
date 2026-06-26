@@ -313,26 +313,25 @@ def test_generate_internal_async_submit_poll_success(
 
 @patch("app.backend.connector_client.ConnectorClient._generate_sync")
 @patch("app.backend.connector_client.ConnectorClient._generate_via_internal_async")
-def test_generate_internal_async_connector_error_falls_back_to_sync(
+def test_generate_internal_async_connector_error_does_not_fallback(
     mock_async, mock_sync, connector, app
 ):
     mock_async.side_effect = ConnectorError("async down")
-    mock_sync.return_value = "RAW FROM SYNC"
 
     with app.app_context():
         app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = True
         app.config["CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC"] = True
 
-        result = connector.generate(
-            authorization="Bearer secret-token",
-            user_text="describe a process",
-            provider="openai",
-            model="gpt-4o",
-        )
+        with pytest.raises(ConnectorError):
+            connector.generate(
+                authorization="Bearer secret-token",
+                user_text="describe a process",
+                provider="openai",
+                model="gpt-4o",
+            )
 
-    assert result == "RAW FROM SYNC"
     mock_async.assert_called_once()
-    mock_sync.assert_called_once()
+    mock_sync.assert_not_called()
 
 
 @patch("app.backend.connector_client.ConnectorClient._generate_sync")

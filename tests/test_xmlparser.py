@@ -6,6 +6,7 @@ from app.backend.xml_parser import (
     json_to_bpmn,
     PnmlStructureError,
     repair_pnml_connectivity_from_bpmn,
+    sanitize_bpmn_for_transform,
     validate_pnml_connectivity,
 )
 
@@ -632,3 +633,84 @@ def test_repair_pnml_connectivity_from_bpmn_adds_anchors_for_event_side_flows():
             outbound += 1
     assert inbound >= 1
     assert outbound >= 1
+
+
+def test_sanitize_bpmn_for_transform_removes_duplicate_sequence_flows_and_edges():
+    bpmn = (
+        "<?xml version='1.0' encoding='UTF-8'?>"
+        "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL' "
+        "xmlns:bpmndi='http://www.omg.org/spec/BPMN/20100524/DI' "
+        "xmlns:di='http://www.omg.org/spec/DD/20100524/DI'>"
+        "<process id='p1'>"
+        "<startEvent id='s'/>"
+        "<userTask id='a'/>"
+        "<sequenceFlow id='f1' sourceRef='s' targetRef='a'/>"
+        "<sequenceFlow id='f2' sourceRef='s' targetRef='a'/>"
+        "</process>"
+        "<bpmndi:BPMNDiagram id='d1'><bpmndi:BPMNPlane id='pl1' bpmnElement='p1'>"
+        "<bpmndi:BPMNEdge id='f1_di' bpmnElement='f1'>"
+        "<di:waypoint x='0' y='0'/><di:waypoint x='1' y='1'/></bpmndi:BPMNEdge>"
+        "<bpmndi:BPMNEdge id='f2_di' bpmnElement='f2'>"
+        "<di:waypoint x='0' y='0'/><di:waypoint x='1' y='1'/></bpmndi:BPMNEdge>"
+        "</bpmndi:BPMNPlane></bpmndi:BPMNDiagram>"
+        "</definitions>"
+    )
+
+    sanitized = sanitize_bpmn_for_transform(bpmn)
+    root = ET.fromstring(sanitized)
+
+    flow_pairs = []
+    flow_ids = []
+    for flow in root.iter():
+        if flow.tag.split("}")[-1] != "sequenceFlow":
+            continue
+        flow_ids.append(flow.get("id"))
+        flow_pairs.append((flow.get("sourceRef"), flow.get("targetRef")))
+
+    assert flow_pairs == [("s", "a")]
+    assert flow_ids == ["f1"]
+
+    edge_targets = [
+        edge.get("bpmnElement")
+        for edge in root.iter()
+        if edge.tag.split("}")[-1] == "BPMNEdge"
+    ]
+    assert edge_targets == ["f1"]
+
+
+def test_sanitize_bpmn_for_transform_collapses_passthrough_gateway():
+    bpmn = (
+        "<?xml version='1.0' encoding='UTF-8'?>"
+        "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL' "
+        "xmlns:bpmndi='http://www.omg.org/spec/BPMN/20100524/DI' "
+        "xmlns:di='http://www.omg.org/spec/DD/20100524/DI'>"
+        "<process id='p1'>"
+        "<startEvent id='s'/>"
+        "<exclusiveGateway id='g1'/>"
+        "<userTask id='t1'/>"
+        "<sequenceFlow id='f1' sourceRef='s' targetRef='g1'/>"
+        "<sequenceFlow id='f2' sourceRef='g1' targetRef='t1'/>"
+        "</process>"
+        "<bpmndi:BPMNDiagram id='d1'><bpmndi:BPMNPlane id='pl1' bpmnElement='p1'>"
+        "<bpmndi:BPMNShape id='g1_di' bpmnElement='g1'>"
+        "<di:waypoint x='0' y='0'/></bpmndi:BPMNShape>"
+        "<bpmndi:BPMNEdge id='f1_di' bpmnElement='f1'>"
+        "<di:waypoint x='0' y='0'/><di:waypoint x='1' y='1'/></bpmndi:BPMNEdge>"
+        "<bpmndi:BPMNEdge id='f2_di' bpmnElement='f2'>"
+        "<di:waypoint x='0' y='0'/><di:waypoint x='1' y='1'/></bpmndi:BPMNEdge>"
+        "</bpmndi:BPMNPlane></bpmndi:BPMNDiagram>"
+        "</definitions>"
+    )
+
+    sanitized = sanitize_bpmn_for_transform(bpmn)
+    root = ET.fromstring(sanitized)
+
+    gateways = [
+        e for e in root.iter() if e.tag.split("}")[-1] in {"exclusiveGateway", "parallelGateway"}
+    ]
+    assert gateways == []
+
+    flows = [e for e in root.iter() if e.tag.split("}")[-1] == "sequenceFlow"]
+    assert len(flows) == 1
+    assert flows[0].get("sourceRef") == "s"
+    assert flows[0].get("targetRef") == "t1"

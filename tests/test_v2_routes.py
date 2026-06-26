@@ -58,6 +58,32 @@ def test_v2_generate_pnml_transform_error_returns_500(mock_cc, mock_mt, client):
     assert resp.get_json()["error"]["code"] == "transform_error"
 
 
+@patch("app.api.routes.ModelTransformer")
+@patch("app.api.routes.ConnectorClient")
+def test_v2_generate_pnml_few_shot_transform_retries_with_zero_shot(
+    mock_cc, mock_mt, client
+):
+    import requests
+
+    mock_cc.return_value.generate.side_effect = [RAW_MODEL_JSON, RAW_MODEL_JSON]
+    mock_mt.return_value.transform.side_effect = [
+        requests.exceptions.RequestException("few_shot transform fail"),
+        "PNML",
+    ]
+
+    resp = client.post(
+        "/v2/generate/pnml",
+        json={**BODY, "prompting_strategy": "few_shot"},
+        headers=AUTH,
+    )
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {"result": "PNML"}
+    assert mock_cc.return_value.generate.call_count == 2
+    assert mock_cc.return_value.generate.call_args_list[0].kwargs["prompting_strategy"] == "few_shot"
+    assert mock_cc.return_value.generate.call_args_list[1].kwargs["prompting_strategy"] == "zero_shot"
+
+
 # Request validation is owned by the connector (the authoritative validator);
 # the orchestrator forwards the request and relays the connector's response. The
 # following tests assert that forward-and-relay behavior rather than a duplicate
