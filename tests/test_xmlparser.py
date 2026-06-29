@@ -549,3 +549,74 @@ def test_assign_pnml_coordinates_handles_clean_transformer_output():
     assert operator is not None and operator.get("type") == "102"
     resource = root.find(".//toolspecific/transitionResource")
     assert resource is not None and resource.get("roleName") == "clerk"
+
+
+def test_assign_pnml_coordinates_marks_the_source_place():
+    """A workflow net carries exactly one token, in its unique source place (the
+    place with no incoming arc). WoPeD needs that initial marking to play the
+    token game / run soundness -- without it the net is structurally complete
+    but "not started". The post-step must add the marking, and add it only to
+    the source, never to interior/sink places."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='src'/>"  # no incoming arc -> the source
+        "<transition id='t1'/>"
+        "<place id='sink'/>"  # has an incoming arc -> not the source
+        "<arc id='a1' source='src' target='t1'/>"
+        "<arc id='a2' source='t1' target='sink'/>"
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+
+    markings = {}
+    for place in root.iter():
+        if place.tag.split("}")[-1] != "place":
+            continue
+        text = place.find("initialMarking/text")
+        markings[place.get("id")] = text.text if text is not None else None
+
+    # The source holds one token; the sink holds none (no marking, or an
+    # explicit zero -- both mean "empty").
+    assert markings["src"] == "1", markings
+    assert markings["sink"] in (None, "0"), markings
+
+
+def test_assign_pnml_coordinates_keeps_a_dense_layer_overlap_free():
+    """The layout's headline guarantee is an overlap-free diagram. A parallel
+    split fans several places into a single layer; none of them -- nor any other
+    node -- may be placed on the same coordinate, or the shapes render stacked on
+    top of each other. Asserts the guarantee directly: all node positions are
+    distinct."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='src'/><transition id='split'/>"
+        "<place id='b1'/><place id='b2'/><place id='b3'/><place id='b4'/>"
+        "<transition id='join'/><place id='sink'/>"
+        "<arc id='a0' source='src' target='split'/>"
+        "<arc id='s1' source='split' target='b1'/>"
+        "<arc id='s2' source='split' target='b2'/>"
+        "<arc id='s3' source='split' target='b3'/>"
+        "<arc id='s4' source='split' target='b4'/>"
+        "<arc id='j1' source='b1' target='join'/>"
+        "<arc id='j2' source='b2' target='join'/>"
+        "<arc id='j3' source='b3' target='join'/>"
+        "<arc id='j4' source='b4' target='join'/>"
+        "<arc id='a9' source='join' target='sink'/>"
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+
+    coords = {}
+    for node in root.iter():
+        if node.tag.split("}")[-1] not in ("place", "transition"):
+            continue
+        pos = node.find("graphics/position")
+        assert pos is not None, f"{node.get('id')} got no position"
+        coords[node.get("id")] = (int(pos.get("x")), int(pos.get("y")))
+
+    # All eight nodes (incl. the four parallel branches in one layer) are placed,
+    # and no two share a coordinate.
+    assert len(coords) == 8, coords
+    assert len(set(coords.values())) == len(coords), coords
