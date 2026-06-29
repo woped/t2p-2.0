@@ -17,11 +17,16 @@ The three placement stages each use their textbook-grade variant:
    averaged, which stays overlap-free) so straight runs stay aligned without the
    diagonal drift of a single-corner placement.
 
-Edges that a straight line cannot draw cleanly -- loops and forward edges that
-span more than one layer -- are sent through dedicated horizontal lanes by
-:func:`_route_edges` rather than routed through interior routing dummies: the
-clients (and the spine) stay undistorted, and the lane is drawn below the shapes
-it would otherwise cut across.
+Edges spanning more than one layer (forward skips and reversed back-edges) are
+broken into unit segments through interior *dummy vertices* -- one per skipped
+layer -- by :func:`_insert_dummies`. The dummies take part in ordering and
+coordinate assignment like any node, so a long edge threads cleanly between the
+shapes of the layers it crosses (the formal Sugiyama long-edge model) instead of
+detouring around the diagram, and the edge's polyline is simply the path through
+its dummy centres. Only the degenerate cases a dummy cannot help -- self-loops
+and back-edges between adjacent (or the same) layers, where no interior layer
+exists -- still fall back to a horizontal lane below the diagram in
+:func:`_route_edges`.
 """
 
 from collections import deque, defaultdict
@@ -428,6 +433,52 @@ def _assign_coordinates(
     return positions, centers, col_x, col_w
 
 
+def _insert_dummies(node_layer, flows):
+    """Turn the layered graph into a *proper* one: every segment joins adjacent
+    layers.
+
+    For each flow spanning more than one layer -- a forward skip or a back-edge
+    (which spans backwards) -- insert one dummy vertex per interior layer and
+    chain unit segments through them, always low-layer to high-layer so the
+    chain runs with the left-to-right flow. The dummies then take part in
+    ordering and coordinate assignment like any node, which is what lets the
+    edge thread between the shapes it crosses (the formal Sugiyama model).
+
+    Adjacent forward hops (span 1) join the ``unit_edges`` directly; adjacent
+    back-edges, same-layer edges and self-loops have no interior layer to thread
+    and are left for :func:`_route_edges` to lane.
+
+    Returns ``(unit_edges, dummy_layer, chains)``: the adjacent-layer segment
+    list, the ``{dummy_id: layer}`` map of the inserted zero-area points, and
+    ``{flow_index: [dummy_id, ...]}`` ordered by ascending layer.
+    """
+    unit_edges: list[dict] = []
+    dummy_layer: dict[str, int] = {}
+    chains: dict[int, list[str]] = {}
+    for idx, flow in enumerate(flows):
+        a, b = flow.get("source"), flow.get("target")
+        if a not in node_layer or b not in node_layer:
+            continue
+        span = node_layer[b] - node_layer[a]
+        if abs(span) <= 1:
+            if span == 1:  # adjacent forward hop; back/same-layer go to a lane
+                unit_edges.append({"source": a, "target": b})
+            continue
+        lo_node, hi_node = (a, b) if span > 0 else (b, a)
+        lo, hi = node_layer[lo_node], node_layer[hi_node]
+        chain: list[str] = []
+        prev = lo_node
+        for lyr in range(lo + 1, hi):
+            d = f"__d{idx}_{lyr}"
+            dummy_layer[d] = lyr
+            unit_edges.append({"source": prev, "target": d})
+            chain.append(d)
+            prev = d
+        unit_edges.append({"source": prev, "target": hi_node})
+        chains[idx] = chain
+    return unit_edges, dummy_layer, chains
+
+
 def _sugiyama_layout(
     elements_by_id, flows, h_gap=80, v_gap=50, x_offset=50, y_offset=50
 ):
@@ -465,6 +516,7 @@ def _sugiyama_layout(
         "col_w": {},
         "node_layer": {},
         "back_edges": set(),
+        "chains": {},
     }
     real_ids = list(elements_by_id.keys())
     if not real_ids:
@@ -480,10 +532,18 @@ def _sugiyama_layout(
 
     node_layer, back_edges = _assign_layers(real_ids, successors)
 
+    # Make the graph proper: long edges become unit segments through dummy
+    # vertices, so ordering and coordinate assignment see only adjacent-layer
+    # edges and the dummies thread the long edges between the shapes they cross.
+    unit_edges, dummy_layer, chains = _insert_dummies(node_layer, flows)
+    aug_layer = {**node_layer, **dummy_layer}
+
     node_w = {nid: elements_by_id[nid]["w"] for nid in real_ids}
     node_h = {nid: elements_by_id[nid]["h"] for nid in real_ids}
+    for d in dummy_layer:  # dummies are zero-area routing points
+        node_w[d], node_h[d] = 0, 0
 
-    layers, up_adj, down_adj = _order_layers(node_layer, flows)
+    layers, up_adj, down_adj = _order_layers(aug_layer, unit_edges)
 
     positions, centers, col_x, col_w = _assign_coordinates(
         layers,
@@ -503,17 +563,19 @@ def _sugiyama_layout(
         "col_w": col_w,
         "node_layer": node_layer,
         "back_edges": back_edges,
+        "chains": chains,
     }
     return positions, ctx
 
 
 def _loop_waypoints(src, tgt, lane_y):
-    """Route a back-edge / multi-layer edge as a U through the *lane_y* corridor.
+    """Route a degenerate loop as a U through the *lane_y* corridor.
 
-    Such edges point against, or leap over, the left-to-right flow, so a
-    straight orthogonal route would cut back across (or through) the columns.
-    Dropping into a dedicated lane keeps them clear of every shape and forward
-    edge; the caller picks a distinct *lane_y* per edge so lanes do not overlap.
+    Used only for back-edges between adjacent (or the same) layers and
+    self-loops -- the cases with no interior layer for a dummy to thread. A
+    straight route would cut back across the columns, so the edge drops into a
+    dedicated lane below the diagram; the caller picks a distinct *lane_y* per
+    edge so lanes do not overlap.
     """
     sx = src["x"] + src["w"]
     sy = src["y"] + src["h"] // 2
@@ -530,6 +592,37 @@ def _loop_waypoints(src, tgt, lane_y):
     ]
 
 
+def _simplify(pts):
+    """Drop interior points that lie on the straight segment between their
+    neighbours -- a bend the client would draw anyway. A straightened skip
+    collapses to its two anchors (no interior points at all)."""
+    if len(pts) <= 2:
+        return pts
+    out = [pts[0]]
+    for i in range(1, len(pts) - 1):
+        ax, ay = out[-1]  # last *kept* point
+        bx, by = pts[i]
+        cx, cy = pts[i + 1]
+        if abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) > 1e-6:
+            out.append(pts[i])
+    out.append(pts[-1])
+    return out
+
+
+def _orthogonalize(pts):
+    """Square off any diagonal segment into a horizontal+vertical pair, bending
+    at the mid-x (which, between adjacent columns, falls in the column gap so the
+    vertical leg clears every shape). A no-op on already-orthogonal routes."""
+    out = [pts[0]]
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+        if abs(x0 - x1) > 1 and abs(y0 - y1) > 1:
+            mx = (x0 + x1) / 2
+            out.append((mx, y0))
+            out.append((mx, y1))
+        out.append((x1, y1))
+    return out
+
+
 def _route_edges(positions, ctx, flows, strategy):
     """Compute waypoint polylines for *flows*, keyed by flow index.
 
@@ -544,14 +637,24 @@ def _route_edges(positions, ctx, flows, strategy):
         split/join fan, which a straight line would draw as a diagonal). Flat
         adjacent-layer edges stay straight (``[]``) -- correct and native for
         PNML.
-    Loops (back-edges / same-layer) and forward edges spanning more than one
-    layer always go through their own horizontal lane below the diagram,
-    regardless of strategy.
+    Edges spanning more than one layer thread through their dummy chain
+    (``ctx["chains"]``): the polyline is their dummy centres, which ordering and
+    coordinate assignment placed between the shapes the edge crosses. Only
+    degenerate loops a dummy cannot help -- back-edges between adjacent (or the
+    same) layers and self-loops -- go through a horizontal lane below the
+    diagram, regardless of strategy.
+
+    Two passes finish every route, in both strategies: each long edge's diagonal
+    ramps are squared into Manhattan segments (verticals fall in the column gaps,
+    so an arc never cuts through a shape its dummy was placed to clear), then any
+    bend point collinear with its neighbours is dropped, so no route stores a
+    segment the client would draw on its own.
     """
     centers = ctx["centers"]
     col_x = ctx["col_x"]
     col_w = ctx["col_w"]
     node_layer = ctx["node_layer"]
+    chains = ctx["chains"]
 
     def _span(flow):
         """Layer distance target - source, or None if an endpoint is missing."""
@@ -631,26 +734,20 @@ def _route_edges(positions, ctx, flows, strategy):
 
     bottom_y = max((p["y"] + p["h"] for p in positions.values()), default=0)
 
-    # Lowest real-node edge per layer -- a multi-layer span dips just below the
-    # nodes of the columns it skips, so its lane clears them without diving all
-    # the way under the diagram like a loop does.
-    layer_bottom: dict[int, float] = {}
-    for nid, p in positions.items():
-        lyr = node_layer[nid]
-        layer_bottom[lyr] = max(layer_bottom.get(lyr, p["y"] + p["h"]), p["y"] + p["h"])
-
     def _loop_span(idx):
         src = positions[flows[idx]["source"]]
         tgt = positions[flows[idx]["target"]]
         return abs((src["x"] + src["w"]) - tgt["x"])
 
-    # Each loop (back-edge / same-layer) gets its own lane below the diagram;
-    # narrower loops take the shallower lanes so wider loops nest underneath.
+    # Degenerate loops (self-loops and back-edges between adjacent or the same
+    # layer) have no interior layer to thread, so each gets its own lane below
+    # the diagram; narrower loops take the shallower lanes so wider ones nest
+    # underneath.
     loop_indices = sorted(
         (
             i
             for i, flow in enumerate(flows)
-            if (_span(flow) is not None and _span(flow) <= 0)
+            if (_span(flow) is not None and -1 <= _span(flow) <= 0)
             and flow["source"] in positions
             and flow["target"] in positions
         ),
@@ -658,53 +755,41 @@ def _route_edges(positions, ctx, flows, strategy):
     )
     loop_lane = {idx: bottom_y + 50 + k * 45 for k, idx in enumerate(loop_indices)}
 
-    def _span_base(idx):
-        """Y just below the columns a multi-layer span skips (clears their nodes)."""
-        src_l = node_layer[flows[idx]["source"]]
-        tgt_l = node_layer[flows[idx]["target"]]
-        spanned = [
-            layer_bottom[lyr] for lyr in range(src_l + 1, tgt_l) if lyr in layer_bottom
-        ]
-        if spanned:
-            return max(spanned)
-        return max(
-            positions[flows[idx]["source"]]["y"] + positions[flows[idx]["source"]]["h"],
-            positions[flows[idx]["target"]]["y"] + positions[flows[idx]["target"]]["h"],
-        )
+    def _dummy_route(idx, span, flow):
+        """Polyline of a long edge: its dummy centres, plus the end anchors.
 
-    # Lane per multi-layer span; spans that would share a lane stagger downward so
-    # parallel detours never draw on top of one another.
-    multilayer_indices = sorted(
-        (i for i, flow in enumerate(flows) if (_span(flow) or 0) >= 2),
-        key=_span_base,
-    )
-    multilayer_lane: dict[int, float] = {}
-    stack_by_base: dict[float, int] = defaultdict(int)
-    for i in multilayer_indices:
-        base = _span_base(i)
-        multilayer_lane[i] = base + 40 + stack_by_base[base] * 22
-        stack_by_base[base] += 1
+        Dummy ids in ``chains[idx]`` run low-layer to high-layer; a back-edge
+        (span < 0) walks them in reverse so the polyline still reads source to
+        target. The edge exits the side of the source that faces the target and
+        enters the matching side of the target.
+        """
+        src, tgt = flow["source"], flow["target"]
+        sp, tp = positions[src], positions[tgt]
+        seq = chains[idx] if span > 0 else list(reversed(chains[idx]))
+        if span > 0:
+            exit_pt = (sp["x"] + sp["w"], centers[src][1])
+            entry_pt = (tp["x"], centers[tgt][1])
+        else:
+            exit_pt = (sp["x"], centers[src][1])
+            entry_pt = (tp["x"] + tp["w"], centers[tgt][1])
+        return [exit_pt, *(centers[d] for d in seq), entry_pt]
 
     routes: dict[int, list] = {}
     for idx, flow in enumerate(flows):
         span = _span(flow)
         if span is None:
             routes[idx] = []
+        elif abs(span) >= 2:
+            # Long edge: thread through its dummy chain (forward skip or loop).
+            routes[idx] = _dummy_route(idx, span, flow)
         elif span <= 0:
-            # Loop / same-layer: U through its lane below the diagram.
+            # Degenerate loop / same-layer: U through its lane below the diagram.
             routes[idx] = (
                 _loop_waypoints(
                     positions[flow["source"]], positions[flow["target"]], loop_lane[idx]
                 )
                 if idx in loop_lane
                 else []
-            )
-        elif span >= 2:
-            # Multi-layer span: U through a lane just below the columns it skips.
-            routes[idx] = _loop_waypoints(
-                positions[flow["source"]],
-                positions[flow["target"]],
-                multilayer_lane[idx],
             )
         elif not _routed_hop(idx):
             routes[idx] = []  # flat adjacent hop, left straight (sparse)
@@ -723,4 +808,16 @@ def _route_edges(positions, ctx, flows, strategy):
                     (channel, hop["y2"]),
                     entry_pt,
                 ]
+
+    # Square off each long edge's diagonal ramps into its routing lane: a direct
+    # diagonal can cut straight through the very shape the dummy was placed to
+    # clear, whereas Manhattan legs keep verticals in the column gaps and
+    # horizontals at the (cleared) dummy-lane heights. Risers and loops are
+    # orthogonal already, so only the dummy chains need it. Then drop every bend
+    # point collinear with its neighbours, so no route carries a segment the
+    # client would draw on its own (a straightened skip keeps no interior points).
+    for idx, pts in routes.items():
+        if idx in chains:
+            pts = _orthogonalize(pts)
+        routes[idx] = _simplify(pts)
     return routes

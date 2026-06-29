@@ -407,8 +407,9 @@ def test_assign_pnml_coordinates_routes_back_edge_loops():
     """A back-edge (rework loop) must get explicit arc bend points so every
     client renders the loop the same way instead of auto-routing it.
 
-    Only the loop-closing arc is routed; the forward arcs stay waypoint-free
-    (short, ~horizontal hops the client can route itself)."""
+    Spanning more than one layer, the loop threads through its interior dummy
+    column(s) -- formal Sugiyama long-edge routing -- rather than detouring in a
+    lane below the diagram."""
     pnml = (
         "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
         "<place id='p1'/>"
@@ -424,30 +425,36 @@ def test_assign_pnml_coordinates_routes_back_edge_loops():
 
     root = ET.fromstring(assign_pnml_coordinates(pnml))
 
+    centers = {}
     waypoints = {}
-    for arc in root.iter():
-        if arc.tag.split("}")[-1] == "arc":
-            positions = arc.findall("graphics/position")
-            waypoints[arc.get("id")] = positions
+    for el in root.iter():
+        tag = el.tag.split("}")[-1]
+        if tag in ("place", "transition"):
+            pos = el.find("graphics/position")
+            if pos is not None:
+                centers[el.get("id")] = (int(pos.get("x")), int(pos.get("y")))
+        elif tag == "arc":
+            waypoints[el.get("id")] = [
+                (int(p.get("x")), int(p.get("y")))
+                for p in el.findall("graphics/position")
+            ]
 
-    # The back-edge is routed with interior bend points; forward arcs are not.
-    assert len(waypoints["a4"]) >= 2, "loop arc got no bend points"
-    assert all(len(waypoints[fwd]) == 0 for fwd in ("a1", "a2", "a3"))
+    # The back-edge is routed with interior bend points; the flat forward hop is not.
+    assert len(waypoints["a4"]) >= 1, "loop arc got no bend points"
+    assert waypoints["a1"] == []
 
-    # The loop's bend points dip into a lane below the lowest node.
-    bottom_y = max(
-        int(pos.get("y"))
-        for node in root.iter()
-        if node.tag.split("}")[-1] in ("place", "transition")
-        for pos in [node.find("graphics/position")]
-        if pos is not None
-    )
-    assert any(int(p.get("y")) > bottom_y for p in waypoints["a4"])
+    # Each bend threads through an interior column (its x lies strictly between
+    # the loop's endpoints), not a lane off to the side of the diagram.
+    lo_x = min(centers["review"][0], centers["rework"][0])
+    hi_x = max(centers["review"][0], centers["rework"][0])
+    assert all(lo_x < x < hi_x for x, _ in waypoints["a4"]), waypoints["a4"]
 
 
 def test_assign_pnml_coordinates_straightens_multi_layer_arc():
-    """A multi-layer (skip) arc must route through ONE horizontal lane, not a
-    staircase of per-dummy bend points. The interior is a single flat segment."""
+    """A multi-layer (skip) arc threads through its dummy chain as a clean
+    orthogonal staple -- up into a gap, across a single lane clear of the shapes
+    it skips, back down -- not a per-dummy staircase, a diagonal that could cut
+    through a shape, or a lane dipping below the diagram."""
     pnml = (
         "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
         "<place id='p0'/><transition id='t0'/><place id='p1'/><transition id='t1'/>"
@@ -460,20 +467,35 @@ def test_assign_pnml_coordinates_straightens_multi_layer_arc():
     )
 
     root = ET.fromstring(assign_pnml_coordinates(pnml))
+    centers = {
+        el.get("id"): (
+            int(el.find("graphics/position").get("x")),
+            int(el.find("graphics/position").get("y")),
+        )
+        for el in root.iter()
+        if el.tag.split("}")[-1] in ("place", "transition")
+        and el.find("graphics/position") is not None
+    }
     skip = next(a for a in root.iter() if a.get("id") == "askip")
     pts = [
         (int(p.get("x")), int(p.get("y"))) for p in skip.findall("graphics/position")
     ]
 
-    # No staircase: a clean U has few points, and the horizontal run sits at a
-    # single y (the lane) rather than drifting through every dummy's height.
-    assert len(pts) <= 4, f"expected a flat lane, got a staircase: {pts}"
-    lane_ys = sorted({y for _, y in pts})
-    assert len(lane_ys) <= 3, f"too many distinct heights for a U: {pts}"
-    # The two deepest points (the lane) share one y and span the width.
-    deepest = max(y for _, y in pts)
-    lane_pts = [x for x, y in pts if y == deepest]
-    assert len(lane_pts) >= 2 and max(lane_pts) - min(lane_pts) > 0
+    # Threaded left to right through interior columns (between the endpoints).
+    assert len(pts) >= 2, f"skip arc not threaded: {pts}"
+    xs = [x for x, _ in pts]
+    assert xs == sorted(xs), f"bend x not monotonic across columns: {pts}"
+    assert all(centers["p0"][0] < x < centers["p3"][0] for x in xs), pts
+    # Orthogonal: every segment is horizontal or vertical (Manhattan), never a
+    # diagonal that could cut across a shape.
+    assert all(ax == bx or ay == by for (ax, ay), (bx, by) in zip(pts, pts[1:])), (
+        f"skip arc not orthogonal: {pts}"
+    )
+    # Its horizontal run is a single lane, and threads through the diagram rather
+    # than dipping below it.
+    lane_ys = {ay for (ax, ay), (bx, by) in zip(pts, pts[1:]) if ay == by}
+    assert len(lane_ys) == 1, f"skip lane not a single height: {pts}"
+    assert all(y <= max(c[1] for c in centers.values()) for _, y in pts), pts
 
 
 def test_assign_pnml_coordinates_passes_through_non_xml():
