@@ -92,7 +92,32 @@ curl http://localhost:4000/v2/health
 
 ## Versioning
 
-The service version is stored in the root-level `version.py` file under the `__version__` attribute. This value is used for container tagging in CI.
+The service version is still stored in the root-level `version.py` file for application metadata. CI release tagging and Docker image tagging are derived from git tags created by the CD pipeline.
+
+## Release Bump Controls
+
+The CD workflow supports controlled semantic bumps using GitHub Actions repository variables:
+
+- `ALLOW_MINOR_BUMP`
+- `ALLOW_MAJOR_BUMP`
+
+Default behavior (recommended):
+
+- `ALLOW_MINOR_BUMP=false`
+- `ALLOW_MAJOR_BUMP=false`
+
+With these defaults, the pipeline always creates a patch bump (`vX.Y.Z -> vX.Y.(Z+1)`).
+
+When enabled:
+
+- If `ALLOW_MINOR_BUMP=true`, the workflow can apply a minor bump suggested by semantic-release.
+- If `ALLOW_MAJOR_BUMP=true`, the workflow can apply a major bump suggested by semantic-release.
+
+Boolean values accepted as true are: `true`, `1`, `yes`, `y`, `on` (case-insensitive). Any other value is treated as false.
+
+Configure these variables in repository settings:
+
+- GitHub -> Settings -> Secrets and variables -> Actions -> Variables -> Repository variables
 
 ## Running unit tests
 
