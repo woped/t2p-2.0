@@ -804,35 +804,30 @@ def _route_edges(positions, ctx, flows, strategy):
                 segs_by_gap[seg["layer"]].append(seg)
         seg_lists[idx] = segs
 
-    # Assign a vertical channel to every height-changing segment in a gap.
-    #   * ``sparse`` (PNML): every arc is its own line -- the native Petri-net
-    #     convention (WoPeD draws each arc separately; a shared trunk would hide
-    #     how many arcs meet a place). No bundling.
-    #   * ``full_ortho`` (BPMN): a gateway's fan bundles onto one trunk, which is
-    #     conventional and compact -- but keyed on the edge's *real* direction
-    #     (``back``) so an incoming back-edge never shares a node's outgoing
-    #     trunk (which made the node look mid-line instead of an endpoint).
+    # Assign a vertical channel per gap. A gateway's fan (segments sharing a
+    # source/split or target/join) bundles onto ONE shared trunk -- this is the
+    # clean orthogonal "comb" the fat client produces, for both BPMN and PNML.
+    # (Giving every arc its own channel instead staggers the branches into
+    # crooked steps, so it is not done.) The key includes the edge's real
+    # direction (``back``) so an incoming back-edge never shares a node's
+    # outgoing trunk -- which made the node look mid-line instead of an endpoint.
     for lyr, segs in segs_by_gap.items():
         gap_lo = col_x[lyr] + col_w[lyr]
         gap_hi = col_x[lyr + 1]
+        out_count: dict[tuple, int] = defaultdict(int)
+        in_count: dict[tuple, int] = defaultdict(int)
+        for s in segs:
+            out_count[(s["a"], s["back"])] += 1
+            in_count[(s["b"], s["back"])] += 1
         bundles: dict[tuple, list] = {}
-        if strategy == "sparse":
-            for s in segs:
-                bundles[("single", id(s))] = [s]
-        else:
-            out_count: dict[tuple, int] = defaultdict(int)
-            in_count: dict[tuple, int] = defaultdict(int)
-            for s in segs:
-                out_count[(s["a"], s["back"])] += 1
-                in_count[(s["b"], s["back"])] += 1
-            for s in segs:
-                if in_count[(s["b"], s["back"])] > 1:
-                    key = ("in", s["b"], s["back"])
-                elif out_count[(s["a"], s["back"])] > 1:
-                    key = ("out", s["a"], s["back"])
-                else:
-                    key = ("single", id(s))
-                bundles.setdefault(key, []).append(s)
+        for s in segs:
+            if in_count[(s["b"], s["back"])] > 1:
+                key = ("in", s["b"], s["back"])
+            elif out_count[(s["a"], s["back"])] > 1:
+                key = ("out", s["a"], s["back"])
+            else:
+                key = ("single", id(s))
+            bundles.setdefault(key, []).append(s)
         kind_rank = {"out": 0, "single": 1, "in": 2}
 
         def _bundle_key(key):
