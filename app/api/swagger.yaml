@@ -328,20 +328,28 @@ components:
       properties:
         error:
           type: object
+          required: [code, message, request_id]
           properties:
             code:
               type: string
               description: >-
-                Stable identifier relayed from the connector. Values include
+                Stable identifier. Codes relayed from the connector:
                 `invalid_request`, `invalid_provider` (400); `unauthorized` (401);
                 `model_unprocessable` (422 — the description could not be turned
                 into a valid model; carries `details`); `upstream_error`
-                (429 retryable / 500 connector unreachable); `transform_error`,
-                `invalid_model`, `internal_error` (500).
+                (429 retryable). Codes produced by this service: `deprecated`
+                (410); `upstream_error` (500 connector unreachable);
+                `transform_error`, `invalid_model`, `internal_error` (500).
               example: invalid_request
             message:
               type: string
               example: "Missing or empty field(s): provider."
+            request_id:
+              type: string
+              description: >-
+                Correlation id, always present; mirrors the `X-Request-ID`
+                response header so a caller can quote it to pin the failure.
+              example: 3f1c9a8e-2b4d-4e9a-9f1a-7c2e0b5d6a11
             details:
               type: array
               items:

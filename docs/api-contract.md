@@ -53,18 +53,26 @@ The model registry is owned by the connector; this endpoint proxies the connecto
 
 ## Error codes
 
-Error responses share the shape `{ "error": { "code": string, "message": string } }`
+Error responses share the shape
+`{ "error": { "code": string, "message": string, "request_id": string, "details"?: string[] } }`
 (see the `Error` schema in the spec). `error.code` is a stable identifier;
-`error.message` is a short human-readable string.
+`error.message` is a short human-readable string; `error.request_id` is always
+present (also on the `X-Request-ID` response header) for log correlation;
+`error.details` is optional and accompanies `model_unprocessable`.
+
+Codes marked *(relayed)* originate in the connector and are passed through by
+`/v2/generate/*` unchanged; the rest are produced by t2p-2.0.
 
 | Status | code | Meaning |
 |--------|------|---------|
-| 400 | `invalid_request`  | malformed body or missing/empty `text` |
-| 400 | `invalid_provider` | `provider`/`model` not in the registry |
-| 401 | `unauthorized`     | missing or malformed bearer token |
+| 400 | `invalid_request`  | *(relayed)* malformed body or missing/empty `text` |
+| 400 | `invalid_provider` | *(relayed)* `provider`/`model` not in the registry |
+| 401 | `unauthorized`     | *(relayed)* missing or malformed bearer token |
 | 410 | `deprecated`       | the already-sunset `/api_call` endpoint was called |
-| 500 | `upstream_error`   | connector call failed (unreachable, timeout, non-200) |
-| 500 | `invalid_model`    | connector replied, but the process model was unreadable or structurally invalid |
+| 422 | `model_unprocessable` | *(relayed)* the description could not be turned into a valid model; carries `details` |
+| 429 | `upstream_error`   | *(relayed)* connector signalled a retryable upstream condition |
+| 500 | `upstream_error`   | connector call failed (unreachable, timeout, non-2xx) |
+| 500 | `invalid_model`    | connector replied, but the process model could not be parsed or built |
 | 500 | `transform_error`  | the BPMN→PNML transformation service failed (`/v2/generate/pnml` only) |
 | 500 | `internal_error`   | unexpected error |
 
@@ -105,9 +113,12 @@ future world-model processing can consume or enrich the logical model without ca
 XML markup in the LLM exchange. This is intended to reduce markup-related token
 overhead; the actual token reduction must be measured once that workflow is implemented.
 
-T2P owns conversion from the structured JSON process model to BPMN XML. It first
-verifies the model's structure — a reply that cannot be parsed or is structurally
-invalid surfaces as `500 invalid_model` — then converts it.
+T2P owns conversion from the structured JSON process model to BPMN XML. The
+builder is a pure translator: graph validity (flows referencing real nodes,
+reachability, …) is the connector's contract to guarantee and is not re-checked
+here. Only a crash-safety net remains — a reply that is not valid JSON, or whose
+graph is malformed enough to fail during the build, surfaces as `500
+invalid_model`; otherwise the model is converted.
 `POST /v2/generate/bpmn` converts the JSON to BPMN XML and returns that BPMN.
 `POST /v2/generate/pnml` first converts the JSON to BPMN XML, then sends the XML
 to the model-transformer service (`POST <transformer>/transform`,

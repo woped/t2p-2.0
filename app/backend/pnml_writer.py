@@ -1,8 +1,9 @@
 """Lay out a transformer-produced PNML.
 
 The transformer returns a geometry-free PNML; :func:`assign_pnml_coordinates`
-lays it out with the shared layout core (centre coordinates plus loop bend
-points) and :func:`_clean_pnml` strips the noise it leaves behind.
+lays it out with the shared layout core (centre coordinates plus arc waypoints
+for rework-loop back-edges and multi-layer arcs) and :func:`_clean_pnml` strips
+the noise it leaves behind.
 """
 
 import logging

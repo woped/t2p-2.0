@@ -17,6 +17,10 @@ This repository contains a Flask-based web API for converting and transforming p
 - "/api/swagger.yaml" Route - Swagger/OpenAPI specification
 - "/api_call" Route - Removed endpoint after its 2025-12-31 sunset date
 
+Every request carries a correlation id on the `X-Request-ID` response header
+(echoed from the request when supplied, otherwise generated); the same id is
+included as `request_id` in every v2 error body and forwarded to the connector.
+
 ## Installation
 
 Install WSL as instructed here:
