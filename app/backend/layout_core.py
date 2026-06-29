@@ -22,8 +22,10 @@ broken into unit segments through interior *dummy vertices* -- one per skipped
 layer -- by :func:`_insert_dummies`. The dummies take part in ordering and
 coordinate assignment like any node, so a long edge threads cleanly between the
 shapes of the layers it crosses (the formal Sugiyama long-edge model) instead of
-detouring around the diagram, and the edge's polyline is simply the path through
-its dummy centres. Only the degenerate cases a dummy cannot help -- self-loops
+detouring around the diagram. :func:`_route_edges` then routes *every* unit
+segment of the proper graph by one rule -- a real adjacent edge and a link of a
+dummy chain are indistinguishable -- so long and short edges from a split share
+the same trunk. Only the degenerate cases a dummy cannot help -- self-loops
 and back-edges between adjacent (or the same) layers, where no interior layer
 exists -- still fall back to a horizontal lane below the diagram in
 :func:`_route_edges`.
@@ -609,46 +611,25 @@ def _simplify(pts):
     return out
 
 
-def _orthogonalize(pts):
-    """Square off any diagonal segment into a horizontal+vertical pair, bending
-    at the mid-x (which, between adjacent columns, falls in the column gap so the
-    vertical leg clears every shape). A no-op on already-orthogonal routes."""
-    out = [pts[0]]
-    for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-        if abs(x0 - x1) > 1 and abs(y0 - y1) > 1:
-            mx = (x0 + x1) / 2
-            out.append((mx, y0))
-            out.append((mx, y1))
-        out.append((x1, y1))
-    return out
-
-
 def _route_edges(positions, ctx, flows, strategy):
     """Compute waypoint polylines for *flows*, keyed by flow index.
 
     Returns ``{index: [(x, y), ...]}``; each polyline includes its end anchors.
-    ``strategy``:
-      * ``"full_ortho"`` -- route every adjacent-layer edge orthogonally (BPMN's
-        convention). Vertical risers live in the gaps between columns (one
-        channel per riser) and edges sharing a split source or join target
-        bundle onto a shared channel.
-      * ``"sparse"`` -- route only what a straight line cannot draw cleanly:
-        adjacent-layer edges whose endpoints sit at different heights (a
-        split/join fan, which a straight line would draw as a diagonal). Flat
-        adjacent-layer edges stay straight (``[]``) -- correct and native for
-        PNML.
-    Edges spanning more than one layer thread through their dummy chain
-    (``ctx["chains"]``): the polyline is their dummy centres, which ordering and
-    coordinate assignment placed between the shapes the edge crosses. Only
-    degenerate loops a dummy cannot help -- back-edges between adjacent (or the
-    same) layers and self-loops -- go through a horizontal lane below the
-    diagram, regardless of strategy.
 
-    Two passes finish every route, in both strategies: each long edge's diagonal
-    ramps are squared into Manhattan segments (verticals fall in the column gaps,
-    so an arc never cuts through a shape its dummy was placed to clear), then any
-    bend point collinear with its neighbours is dropped, so no route stores a
-    segment the client would draw on its own.
+    Routing follows the *proper graph*: a long edge is a chain of unit segments
+    through its dummy vertices (``ctx["chains"]``), and **every** unit segment --
+    a real adjacent-layer edge or one link of a dummy chain -- is routed by the
+    same rule. A height-changing segment turns through a vertical channel in its
+    column gap; segments sharing an endpoint (a split source ``a`` or a join
+    target ``b``) bundle onto one channel, so a gateway's whole fan -- short
+    branches and long skips alike -- rides a single trunk instead of stacking
+    separate overlapping stubs. A flat segment is a straight line.
+
+    ``strategy`` only changes a *flat, single-segment* real edge: ``"sparse"``
+    (PNML) leaves it waypoint-free (``[]``) for the client to draw straight,
+    ``"full_ortho"`` (BPMN) emits its two anchors explicitly. Degenerate loops a
+    dummy cannot help -- self-loops and back-edges between adjacent (or the same)
+    layers -- go through a horizontal lane below the diagram.
     """
     centers = ctx["centers"]
     col_x = ctx["col_x"]
@@ -663,74 +644,83 @@ def _route_edges(positions, ctx, flows, strategy):
             return None
         return node_layer[tgt] - node_layer[src]
 
-    # Single adjacent-layer hops (span 1). Their height-changing members each get
-    # a vertical channel in the column gap; the rest are straight lines. Spans of
-    # >= 2 layers and loops route through lanes below (handled further down).
-    hop_by_flow: dict[int, dict] = {}
+    # Decompose every routed edge into the proper graph's unit (adjacent-layer)
+    # segments: the real endpoints plus the edge's dummy vertices, ordered low
+    # layer to high. A span-1 edge is one segment; a long edge (forward skip or
+    # back-edge) is its dummy chain. ``seg_lists`` keeps each flow's segments in
+    # ascending-layer order for re-assembly; ``segs_by_gap`` groups the
+    # height-changing ones by column gap for channel assignment.
+    seg_lists: dict[int, list] = {}
+    segs_by_gap: dict[int, list] = defaultdict(list)
     for idx, flow in enumerate(flows):
-        if _span(flow) == 1:
-            src, tgt = flow["source"], flow["target"]
-            hop_by_flow[idx] = {
-                "a": src,
-                "b": tgt,
-                "layer": node_layer[src],
-                "y1": centers[src][1],
-                "y2": centers[tgt][1],
+        span = _span(flow)
+        if span is None or -1 <= span <= 0:
+            continue  # unrouted, or a degenerate loop (laned below)
+        src, tgt = flow["source"], flow["target"]
+        path = (
+            [src, *chains.get(idx, []), tgt]
+            if span > 0
+            else [tgt, *chains.get(idx, []), src]
+        )
+        lo_layer = node_layer[path[0]]
+        segs = []
+        for i, (a, b) in enumerate(zip(path, path[1:])):
+            seg = {
+                "a": a,
+                "b": b,
+                "layer": lo_layer + i,
+                "y1": centers[a][1],
+                "y2": centers[b][1],
                 "channel": None,
             }
+            segs.append(seg)
+            if abs(seg["y1"] - seg["y2"]) >= 1:
+                segs_by_gap[seg["layer"]].append(seg)
+        seg_lists[idx] = segs
 
-    def _routed_hop(idx):
-        """Whether single-hop flow *idx* gets a route, vs being left straight."""
-        hop = hop_by_flow.get(idx)
-        if hop is None:
-            return False
-        if strategy == "full_ortho":
-            return True
-        # Route a single hop only when it changes height (a split/join fan); a
-        # flat hop is a clean straight line, left to ``[]``.
-        return abs(hop["y1"] - hop["y2"]) >= 1
-
-    # Every height-changing routed hop needs a vertical channel in its column
-    # gap; collect them per gap (skipping hops left straight).
-    risers_by_gap: dict[int, list] = defaultdict(list)
-    for idx, hop in hop_by_flow.items():
-        if _routed_hop(idx) and abs(hop["y1"] - hop["y2"]) >= 1:
-            risers_by_gap[hop["layer"]].append(hop)
-
-    for lyr, hops in risers_by_gap.items():
+    # Assign a vertical channel to every height-changing segment in a gap.
+    # Segments sharing a source (``a``, a split) or target (``b``, a join) bundle
+    # onto one channel so they fan from a single trunk; others get their own.
+    # Channels go left-to-right: splits near the source, joins near the target,
+    # singletons between, ties broken by mean height.
+    for lyr, segs in segs_by_gap.items():
         gap_lo = col_x[lyr] + col_w[lyr]
         gap_hi = col_x[lyr + 1]
-        # Edges sharing a target (a join) or a source (a split) collapse onto one
-        # shared channel, so they turn at the same x and meet at a single point
-        # instead of stair-stepping. Other hops each get their own.
         out_count: dict[str, int] = defaultdict(int)
         in_count: dict[str, int] = defaultdict(int)
-        for hop in hops:
-            out_count[hop["a"]] += 1
-            in_count[hop["b"]] += 1
+        for s in segs:
+            out_count[s["a"]] += 1
+            in_count[s["b"]] += 1
         bundles: dict[tuple, list] = {}
-        for hop in hops:
-            if in_count[hop["b"]] > 1:
-                key = ("in", hop["b"])
-            elif out_count[hop["a"]] > 1:
-                key = ("out", hop["a"])
+        for s in segs:
+            if in_count[s["b"]] > 1:
+                key = ("in", s["b"])
+            elif out_count[s["a"]] > 1:
+                key = ("out", s["a"])
             else:
-                key = ("single", id(hop))
-            bundles.setdefault(key, []).append(hop)
-        # Lay channels left-to-right: splits near their source, joins near their
-        # target, singletons between; break ties by mean height.
+                key = ("single", id(s))
+            bundles.setdefault(key, []).append(s)
         kind_rank = {"out": 0, "single": 1, "in": 2}
 
         def _bundle_key(key):
-            ys = [(h["y1"] + h["y2"]) / 2 for h in bundles[key]]
+            ys = [(s["y1"] + s["y2"]) / 2 for s in bundles[key]]
             return (kind_rank[key[0]], sum(ys) / len(ys))
 
         ordered = sorted(bundles, key=_bundle_key)
         count = len(ordered)
         for i, key in enumerate(ordered):
             channel = gap_lo + (i + 1) * (gap_hi - gap_lo) / (count + 1)
-            for hop in bundles[key]:
-                hop["channel"] = channel
+            for s in bundles[key]:
+                s["channel"] = channel
+
+    def _seg_points(s):
+        """Orthogonal points for one segment, low-layer (left) end first."""
+        ax = positions[s["a"]]["x"] + positions[s["a"]]["w"]  # right of a
+        bx = positions[s["b"]]["x"]  # left of b
+        if s["channel"] is None:  # flat -> straight
+            return [(ax, s["y1"]), (bx, s["y2"])]
+        ch = s["channel"]
+        return [(ax, s["y1"]), (ch, s["y1"]), (ch, s["y2"]), (bx, s["y2"])]
 
     bottom_y = max((p["y"] + p["h"] for p in positions.values()), default=0)
 
@@ -755,34 +745,12 @@ def _route_edges(positions, ctx, flows, strategy):
     )
     loop_lane = {idx: bottom_y + 50 + k * 45 for k, idx in enumerate(loop_indices)}
 
-    def _dummy_route(idx, span, flow):
-        """Polyline of a long edge: its dummy centres, plus the end anchors.
-
-        Dummy ids in ``chains[idx]`` run low-layer to high-layer; a back-edge
-        (span < 0) walks them in reverse so the polyline still reads source to
-        target. The edge exits the side of the source that faces the target and
-        enters the matching side of the target.
-        """
-        src, tgt = flow["source"], flow["target"]
-        sp, tp = positions[src], positions[tgt]
-        seq = chains[idx] if span > 0 else list(reversed(chains[idx]))
-        if span > 0:
-            exit_pt = (sp["x"] + sp["w"], centers[src][1])
-            entry_pt = (tp["x"], centers[tgt][1])
-        else:
-            exit_pt = (sp["x"], centers[src][1])
-            entry_pt = (tp["x"] + tp["w"], centers[tgt][1])
-        return [exit_pt, *(centers[d] for d in seq), entry_pt]
-
     routes: dict[int, list] = {}
     for idx, flow in enumerate(flows):
         span = _span(flow)
         if span is None:
             routes[idx] = []
-        elif abs(span) >= 2:
-            # Long edge: thread through its dummy chain (forward skip or loop).
-            routes[idx] = _dummy_route(idx, span, flow)
-        elif span <= 0:
+        elif -1 <= span <= 0:
             # Degenerate loop / same-layer: U through its lane below the diagram.
             routes[idx] = (
                 _loop_waypoints(
@@ -791,33 +759,21 @@ def _route_edges(positions, ctx, flows, strategy):
                 if idx in loop_lane
                 else []
             )
-        elif not _routed_hop(idx):
-            routes[idx] = []  # flat adjacent hop, left straight (sparse)
         else:
-            src, tgt = flow["source"], flow["target"]
-            hop = hop_by_flow[idx]
-            exit_pt = (positions[src]["x"] + positions[src]["w"], centers[src][1])
-            entry_pt = (positions[tgt]["x"], hop["y2"])
-            if abs(hop["y1"] - hop["y2"]) < 1:
-                routes[idx] = [exit_pt, entry_pt]
-            else:
-                channel = hop["channel"]
-                routes[idx] = [
-                    exit_pt,
-                    (channel, hop["y1"]),
-                    (channel, hop["y2"]),
-                    entry_pt,
-                ]
+            segs = seg_lists[idx]
+            # A flat single-segment real edge: PNML leaves the straight line to
+            # the client; BPMN emits its two anchors (handled by re-assembly).
+            if strategy == "sparse" and len(segs) == 1 and segs[0]["channel"] is None:
+                routes[idx] = []
+                continue
+            pts: list = []
+            for s in segs:
+                seg_pts = _seg_points(s)
+                if pts and pts[-1] == seg_pts[0]:  # drop the shared dummy junction
+                    seg_pts = seg_pts[1:]
+                pts.extend(seg_pts)
+            if span < 0:  # back-edge: emit the polyline source -> target
+                pts.reverse()
+            routes[idx] = pts
 
-    # Square off each long edge's diagonal ramps into its routing lane: a direct
-    # diagonal can cut straight through the very shape the dummy was placed to
-    # clear, whereas Manhattan legs keep verticals in the column gaps and
-    # horizontals at the (cleared) dummy-lane heights. Risers and loops are
-    # orthogonal already, so only the dummy chains need it. Then drop every bend
-    # point collinear with its neighbours, so no route carries a segment the
-    # client would draw on its own (a straightened skip keeps no interior points).
-    for idx, pts in routes.items():
-        if idx in chains:
-            pts = _orthogonalize(pts)
-        routes[idx] = _simplify(pts)
-    return routes
+    return {idx: _simplify(pts) for idx, pts in routes.items()}
