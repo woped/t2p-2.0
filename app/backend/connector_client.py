@@ -2,6 +2,8 @@ import logging
 import requests
 from flask import current_app
 
+from app.request_id import REQUEST_ID_HEADER, get_request_id
+
 # Module-level logger for this module
 logger = logging.getLogger(__name__)
 
@@ -60,8 +62,14 @@ class ConnectorClient:
             malformed response body.
         """
         url = f"{self.base_url}/generate"
-        # Authorization is forwarded verbatim; never log header values.
-        headers = {"Authorization": authorization, "Content-Type": "application/json"}
+        # Authorization is forwarded verbatim; never log header values. The
+        # correlation id is forwarded so the connector logs this call under the
+        # same id as the orchestrator.
+        headers = {
+            "Authorization": authorization,
+            "Content-Type": "application/json",
+            REQUEST_ID_HEADER: get_request_id(),
+        }
         payload = {"user_text": user_text, "provider": provider, "model": model}
 
         logger.info(
@@ -125,8 +133,11 @@ class ConnectorClient:
         url = f"{self.base_url}/models"
 
         logger.debug("Calling connector /models", extra={"url": url})
+        headers = {REQUEST_ID_HEADER: get_request_id()}
         try:
-            response = requests.get(url, timeout=self.timeout, verify=False)
+            response = requests.get(
+                url, headers=headers, timeout=self.timeout, verify=False
+            )
         except requests.exceptions.RequestException as e:
             logger.exception("Connector /models request failed")
             raise ConnectorError(f"Failed to reach the LLM API connector: {e}") from e

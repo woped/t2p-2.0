@@ -73,6 +73,25 @@ def test_generate_sends_contract_request(mock_post, connector, app):
 
 
 @patch("app.backend.connector_client.requests.post")
+def test_generate_forwards_correlation_id(mock_post, connector, app):
+    # The bound request id is forwarded as X-Request-ID so the connector logs
+    # this call under the same id as the orchestrator.
+    from app.request_id import REQUEST_ID_HEADER, set_request_id
+
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.json.return_value = {"raw_response": "ok"}
+
+    with app.app_context():
+        set_request_id("test-correlation-id")
+        connector.generate("Bearer t", "hello", "openai", "gpt-4o")
+
+    assert (
+        mock_post.call_args.kwargs["headers"][REQUEST_ID_HEADER]
+        == "test-correlation-id"
+    )
+
+
+@patch("app.backend.connector_client.requests.post")
 def test_generate_5xx_raises_upstream_error(mock_post, connector, app):
     mock_post.return_value.status_code = 500
     mock_post.return_value.text = "Internal Server Error"

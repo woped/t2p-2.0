@@ -13,6 +13,13 @@ from prometheus_client import (
 )
 from pythonjsonlogger import jsonlogger
 
+from app.request_id import (
+    REQUEST_ID_HEADER,
+    RequestIdFilter,
+    get_request_id,
+    set_request_id,
+)
+
 
 class _MetricProxy:
     """Proxy object that forwards attribute access to the app-registered metric.
@@ -62,7 +69,10 @@ def create_app(config_name=None):
             r"/*": {
                 "origins": "*",
                 "methods": ["POST", "GET", "OPTIONS"],
-                "allow_headers": ["Content-Type", "Authorization"],
+                "allow_headers": ["Content-Type", "Authorization", REQUEST_ID_HEADER],
+                # Let browser clients (woped-web/-next) read the correlation id
+                # off the response so they can show/report it.
+                "expose_headers": [REQUEST_ID_HEADER],
             }
         },
     )
@@ -95,8 +105,9 @@ def create_app(config_name=None):
     else:
         console_handler = logging.StreamHandler()
         console_handler.addFilter(metrics_filter)
+        console_handler.addFilter(RequestIdFilter())
         console_formatter = jsonlogger.JsonFormatter(
-            "%(asctime)s %(levelname)s %(name)s %(message)s",
+            "%(asctime)s %(levelname)s %(name)s %(request_id)s %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
         console_handler.setFormatter(console_formatter)
@@ -105,12 +116,18 @@ def create_app(config_name=None):
 
     @app.before_request
     def suppress_metrics_logging():
+        # Bind the correlation id for every request: honour a client-supplied
+        # X-Request-ID, else mint one. Forwarded to the connector downstream.
+        set_request_id(request.headers.get(REQUEST_ID_HEADER))
         if request.path == "/metrics":
             app.logger.disabled = True
 
     @app.after_request
     def restore_logging(response):
         app.logger.disabled = False
+        # Echo the correlation id so the caller can quote it when reporting a
+        # failure; browser clients can read it via the CORS expose_headers above.
+        response.headers[REQUEST_ID_HEADER] = get_request_id()
         return response
 
     from app.api import api_bp

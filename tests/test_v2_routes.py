@@ -232,6 +232,49 @@ def test_v2_generate_invalid_model_returns_500(mock_cc, client):
     assert resp.get_json()["error"]["code"] == "invalid_model"
 
 
+# --- correlation id -------------------------------------------------------
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_v2_response_echoes_request_id_header(mock_cc, client):
+    # Every response carries an X-Request-ID, minted when the client sends none.
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+
+    resp = client.post("/v2/generate/bpmn", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert resp.headers.get("X-Request-ID")
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_v2_honours_inbound_request_id(mock_cc, client):
+    # A client-supplied X-Request-ID is honoured and echoed back unchanged.
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+
+    resp = client.post(
+        "/v2/generate/bpmn",
+        json=BODY,
+        headers={**AUTH, "X-Request-ID": "client-supplied-id"},
+    )
+
+    assert resp.headers.get("X-Request-ID") == "client-supplied-id"
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_v2_error_body_carries_matching_request_id(mock_cc, client):
+    # The error body's request_id matches the X-Request-ID header, so a caller
+    # can pin the failure in the logs from either.
+    mock_cc.return_value.generate.side_effect = ConnectorError("down")
+
+    resp = client.post(
+        "/v2/generate/bpmn", json=BODY, headers={**AUTH, "X-Request-ID": "trace-42"}
+    )
+
+    assert resp.status_code == 500
+    assert resp.get_json()["error"]["request_id"] == "trace-42"
+    assert resp.headers.get("X-Request-ID") == "trace-42"
+
+
 # --- /v2/models -----------------------------------------------------------
 
 

@@ -21,6 +21,7 @@ from app.backend.connector_client import (
 )
 from app.backend.modeltransformer import ModelTransformer
 from app.backend.pnml_writer import assign_pnml_coordinates
+from app.request_id import get_request_id
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
@@ -48,8 +49,13 @@ def deprecated(view):
 
 
 def _error_response(status_code, code, message):
-    """Build the standard v2 error body: {"error": {"code", "message"}}."""
-    return jsonify({"error": {"code": code, "message": message}}), status_code
+    """Build the standard v2 error body: {"error": {"code", "message", "request_id"}}.
+
+    ``request_id`` is the correlation id (also on the ``X-Request-ID`` response
+    header) so a caller can quote it to pin the failure in the logs.
+    """
+    body = {"error": {"code": code, "message": message, "request_id": get_request_id()}}
+    return jsonify(body), status_code
 
 
 def _removed_api_call_response():
