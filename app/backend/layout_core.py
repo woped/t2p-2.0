@@ -552,7 +552,6 @@ def _sugiyama_layout(
         "node_layer": {},
         "back_edges": set(),
         "chains": {},
-        "v_gap": v_gap,
     }
     real_ids = list(elements_by_id.keys())
     if not real_ids:
@@ -601,7 +600,6 @@ def _sugiyama_layout(
         "node_layer": node_layer,
         "back_edges": back_edges,
         "chains": chains,
-        "v_gap": v_gap,
     }
     return positions, ctx
 
@@ -647,91 +645,6 @@ def _simplify(pts):
     return out
 
 
-def _nearest_free(cur, intervals):
-    """Nearest value to *cur* lying outside every ``(lo, hi)`` interval.
-
-    The intervals are the forbidden bands around obstacles; merging them and, if
-    *cur* sits inside one, snapping to the closer boundary gives the least move
-    that restores clearance.
-    """
-    merged: list[list[float]] = []
-    for lo, hi in sorted(intervals):
-        if merged and lo <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], hi)
-        else:
-            merged.append([lo, hi])
-    for lo, hi in merged:
-        if lo <= cur <= hi:
-            return lo if cur - lo <= hi - cur else hi
-    return cur
-
-
-def _crosses_box(p, q, boxes):
-    """Whether the axis-aligned segment *p*-*q* passes through a box's interior."""
-    lox, hix = sorted((p[0], q[0]))
-    loy, hiy = sorted((p[1], q[1]))
-    for bx0, bx1, by0, by1 in boxes:
-        if hix <= bx0 or lox >= bx1 or hiy <= by0 or loy >= by1:
-            continue
-        return True
-    return False
-
-
-def _nudge_routes(routes, positions, min_gap):
-    """Edge-nudging phase: spread horizontal lanes that run closer than *min_gap*.
-
-    The standard final phase of an orthogonal edge router. Only *interior*
-    horizontal segments move, and only in y, so a segment docked at a node keeps
-    its port and the x-spans of every segment are preserved (moving in x would
-    drag connected horizontals and create new parallels -- measured net-negative,
-    so it is not done). A move is committed only when the shifted segment *and
-    its two connectors* stay clear of every node box, so a nudge can never push
-    an edge through a shape. Node placement is untouched.
-    """
-    boxes = [
-        (p["x"], p["x"] + p["w"], p["y"], p["y"] + p["h"])
-        for p in positions.values()
-        if p["w"] and p["h"]
-    ]
-    pts = {idx: [list(pt) for pt in r] for idx, r in routes.items()}
-    segs = []  # [route, seg_index, y, x_lo, x_hi, movable]
-    for idx, pl in pts.items():
-        n = len(pl)
-        for i in range(n - 1):
-            a, b = pl[i], pl[i + 1]
-            if abs(a[1] - b[1]) < 1 and abs(a[0] - b[0]) >= 1:  # horizontal
-                lo, hi = sorted((a[0], b[0]))
-                segs.append([idx, i, a[1], lo, hi, 0 < i < n - 2])
-    for s in segs:
-        idx, i, y, lo, hi, movable = s
-        if not movable:
-            continue
-        forb = []
-        for t in segs:
-            if t[0] != idx and min(hi, t[4]) - max(lo, t[3]) > 5:  # x-spans overlap
-                forb.append((t[2] - min_gap, t[2] + min_gap))
-        for x0, x1, y0, y1 in boxes:
-            if min(hi, x1) - max(lo, x0) > 5:
-                forb.append((y0 - min_gap, y1 + min_gap))
-        ny = _nearest_free(y, forb)
-        if abs(ny - y) <= 0.5:
-            continue
-        pl = pts[idx]
-        a, b = pl[i][:], pl[i + 1][:]
-        a[1] = b[1] = ny
-        # Committing also lengthens the two connector risers; only move if the
-        # lane and both connectors stay outside every shape.
-        if (
-            _crosses_box(a, b, boxes)
-            or _crosses_box(pl[i - 1], a, boxes)
-            or _crosses_box(b, pl[i + 2], boxes)
-        ):
-            continue
-        pl[i][1] = pl[i + 1][1] = ny
-        s[2] = ny  # later lanes separate against the moved position
-    return {idx: [tuple(pt) for pt in pl] for idx, pl in pts.items()}
-
-
 def _route_edges(positions, ctx, flows, strategy):
     """Compute waypoint polylines for *flows*, keyed by flow index.
 
@@ -751,6 +664,12 @@ def _route_edges(positions, ctx, flows, strategy):
     ``"full_ortho"`` (BPMN) emits its two anchors explicitly. Degenerate loops a
     dummy cannot help -- self-loops and back-edges between adjacent (or the same)
     layers -- go through a horizontal lane below the diagram.
+
+    A final *port* pass (:func:`_assign_ports`, below) then offsets each
+    back-edge's dock off the node centre, so an incoming back-edge never lands on
+    the point a node's forward edges use (which rendered as one line with an
+    arrowhead at each end). Forward edges keep the centre -- their fan stays a
+    single comb.
     """
     centers = ctx["centers"]
     col_x = ctx["col_x"]
@@ -905,8 +824,49 @@ def _route_edges(positions, ctx, flows, strategy):
             routes[idx] = pts
 
     routes = {idx: _simplify(pts) for idx, pts in routes.items()}
-    # Final pass: spread parallel segments that ended up too close (a per-edge
-    # router can't see cross-edge proximity). Then re-simplify to drop any point
-    # a nudge left collinear.
-    routes = _nudge_routes(routes, positions, max(15, ctx["v_gap"] * 0.2))
-    return {idx: _simplify(pts) for idx, pts in routes.items()}
+
+    # Port assignment. A back-edge docks unconventionally -- its target on the
+    # right, its source on the left -- i.e. on the very side a node's forward
+    # edges use, so its end stub lands on the forward edge's stub: one line with
+    # an arrowhead at both ends. Offset each back-edge's dock off the node centre
+    # (toward the side its route bends to, so no jog) and spread several apart;
+    # forward edges keep the centre, so their split/join fan (the comb) is intact.
+    back = {i for i, f in enumerate(flows) if (_span(f) is not None and _span(f) <= 0)}
+
+    def _assign_ports(rts):
+        pts = {idx: [list(p) for p in r] for idx, r in rts.items()}
+        docks: dict[tuple, list] = defaultdict(list)
+        for idx in back:
+            r = pts.get(idx)
+            if not r or len(r) < 2:
+                continue
+            f = flows[idx]
+            for end_i, nb_i, node in ((0, 1, f["source"]), (-1, -2, f["target"])):
+                if node not in positions:
+                    continue
+                box = positions[node]
+                side = "R" if r[end_i][0] >= box["x"] + box["w"] / 2 else "L"
+                docks[(node, side)].append((idx, end_i, nb_i))
+        for (node, _side), ends in docks.items():
+            box = positions[node]
+            cy = box["y"] + box["h"] / 2
+            above = sorted(
+                (e for e in ends if pts[e[0]][e[2]][1] <= cy),
+                key=lambda e: -pts[e[0]][e[2]][1],
+            )
+            below = sorted(
+                (e for e in ends if pts[e[0]][e[2]][1] > cy),
+                key=lambda e: pts[e[0]][e[2]][1],
+            )
+            for group, sign in ((above, -1), (below, 1)):
+                step = min(box["h"] / 2 / (len(group) + 1), 16)
+                for k, (idx, end_i, nb_i) in enumerate(group):
+                    r = pts[idx]
+                    # only the usual horizontal dock stub can shift in y
+                    if abs(r[end_i][1] - r[nb_i][1]) < 1 and r[end_i][0] != r[nb_i][0]:
+                        ny = cy + sign * (k + 1) * step
+                        r[end_i][1] = ny
+                        r[nb_i][1] = ny
+        return {idx: _simplify([tuple(p) for p in r]) for idx, r in pts.items()}
+
+    return _assign_ports(routes)
