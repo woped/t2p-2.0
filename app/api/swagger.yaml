@@ -40,6 +40,10 @@ paths:
           $ref: '#/components/responses/Error'
         '401':
           $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
         '500':
           $ref: '#/components/responses/Error'
 
@@ -71,6 +75,10 @@ paths:
         '400':
           $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '429':
           $ref: '#/components/responses/Error'
         '500':
           $ref: '#/components/responses/Error'
@@ -323,10 +331,24 @@ components:
           properties:
             code:
               type: string
+              description: >-
+                Stable identifier relayed from the connector. Values include
+                `invalid_request`, `invalid_provider` (400); `unauthorized` (401);
+                `model_unprocessable` (422 — the description could not be turned
+                into a valid model; carries `details`); `upstream_error`
+                (429 retryable / 500 connector unreachable); `transform_error`,
+                `invalid_model`, `internal_error` (500).
               example: invalid_request
             message:
               type: string
               example: "Missing or empty field(s): provider."
+            details:
+              type: array
+              items:
+                type: string
+              description: >-
+                Optional structured specifics; present for `model_unprocessable`,
+                listing the concrete validation problems.
 
 tags:
   - name: v2

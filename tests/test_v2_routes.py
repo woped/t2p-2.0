@@ -170,6 +170,30 @@ def test_v2_generate_relays_connector_4xx(mock_cc, client):
 
 
 @patch("app.api.routes.ConnectorClient")
+def test_v2_generate_relays_422_model_unprocessable_with_details(mock_cc, client):
+    # Validation exhaustion in the connector is a 422 (unprocessable input, not
+    # an upstream failure). As a 4xx it is relayed verbatim, so the friendly
+    # message AND the structured `details` reach the client unchanged.
+    body = {
+        "error": {
+            "code": "model_unprocessable",
+            "message": "Could not generate a valid process model from the description.",
+            "details": [
+                "Node 'task_3' has multiple outgoing flows; a split must use a gateway."
+            ],
+        }
+    }
+    mock_cc.return_value.generate.side_effect = ConnectorClientError(422, body)
+
+    resp = client.post("/v2/generate/bpmn", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 422
+    relayed = resp.get_json()["error"]
+    assert relayed["code"] == "model_unprocessable"
+    assert relayed["details"] == body["error"]["details"]
+
+
+@patch("app.api.routes.ConnectorClient")
 def test_v2_generate_relays_4xx_status_when_error_body_is_malformed(mock_cc, client):
     # The connector returned a 4xx but its body is not the expected
     # {"error": {...}} shape. The status is still relayed, with a synthesized
