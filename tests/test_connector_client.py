@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from app import create_app
 from app.backend.connector_client import (
     ConnectorClient,
@@ -10,7 +10,12 @@ from app.backend.connector_client import (
 
 @pytest.fixture
 def app():
-    return create_app("testing")
+    # Default to the synchronous path so the transport-contract tests below
+    # exercise _generate_sync directly. The async submit/poll path has its own
+    # fixture + tests further down.
+    app = create_app("testing")
+    app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = False
+    return app
 
 
 @pytest.fixture
@@ -19,7 +24,7 @@ def connector(app):
         return ConnectorClient()
 
 
-# --- generate -------------------------------------------------------------
+# --- generate (synchronous path) ------------------------------------------
 
 
 @patch("app.backend.connector_client.requests.post")
@@ -245,3 +250,95 @@ def test_generate_status_500_is_upstream_not_client_error(mock_post, connector, 
     with app.app_context():
         with pytest.raises(ConnectorError):
             connector.generate("Bearer t", "text", "openai", "gpt-4o")
+
+
+# --- generate (async submit/poll path) ------------------------------------
+
+
+@pytest.fixture
+def async_app():
+    app = create_app("testing")
+    app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = True
+    app.config["CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC"] = True
+    # No real waiting in tests.
+    app.config["CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS"] = 0.0
+    app.config["CONNECTOR_ASYNC_MAX_WAIT_SECONDS"] = 5
+    return app
+
+
+@pytest.fixture
+def async_connector(async_app):
+    with async_app.app_context():
+        return ConnectorClient()
+
+
+@patch("app.backend.connector_client.requests.get")
+@patch("app.backend.connector_client.requests.post")
+def test_async_submit_and_poll_returns_raw_response(
+    mock_post, mock_get, async_connector, async_app
+):
+    # Submit returns 202 + job id; a status poll reports success with the result.
+    mock_post.return_value.status_code = 202
+    mock_post.return_value.json.return_value = {
+        "job_id": "job-1",
+        "status_url": "/internal/jobs/job-1",
+    }
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {
+        "status": "succeeded",
+        "result": {"raw_response": "RAW"},
+    }
+
+    with async_app.app_context():
+        result = async_connector.generate("Bearer t", "text", "openai", "gpt-4o")
+
+    assert result == "RAW"
+    assert mock_post.call_args.args[0].endswith("/internal/jobs/generate")
+    assert mock_get.call_args.args[0].endswith("/internal/jobs/job-1")
+
+
+@patch("app.backend.connector_client.requests.get")
+@patch("app.backend.connector_client.requests.post")
+def test_async_failed_preserves_client_error_status(
+    mock_post, mock_get, async_connector, async_app
+):
+    # A background failure carrying a 4xx http_status (e.g. 422) must surface as a
+    # relayable ConnectorClientError, not be collapsed into a generic 5xx.
+    mock_post.return_value.status_code = 202
+    mock_post.return_value.json.return_value = {"job_id": "job-2"}
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {
+        "status": "failed",
+        "error": {
+            "http_status": 422,
+            "code": "model_unprocessable",
+            "message": "no valid net",
+            "details": ["x"],
+        },
+    }
+
+    with async_app.app_context():
+        with pytest.raises(ConnectorClientError) as exc_info:
+            async_connector.generate("Bearer t", "text", "openai", "gpt-4o")
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.error_body["error"]["code"] == "model_unprocessable"
+
+
+@patch("app.backend.connector_client.requests.post")
+def test_async_unavailable_falls_back_to_sync(mock_post, async_connector, async_app):
+    # If the connector lacks the internal async endpoint (404), degrade to the
+    # synchronous /generate instead of failing.
+    submit = MagicMock(status_code=404)
+    submit.json.return_value = {"error": {"code": "not_found"}}
+    sync = MagicMock(status_code=200)
+    sync.json.return_value = {"raw_response": "RAW-SYNC"}
+    mock_post.side_effect = [submit, sync]
+
+    with async_app.app_context():
+        result = async_connector.generate("Bearer t", "text", "openai", "gpt-4o")
+
+    assert result == "RAW-SYNC"
+    assert mock_post.call_count == 2
+    assert mock_post.call_args_list[0].args[0].endswith("/internal/jobs/generate")
+    assert mock_post.call_args_list[1].args[0].endswith("/generate")
