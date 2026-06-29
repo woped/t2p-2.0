@@ -311,7 +311,7 @@ def _bk_compaction(order, root, align, node_h, v_gap):
     return x
 
 
-def _bk_run(layer_order, upper_adj, node_h, v_gap):
+def _bk_run(layer_order, upper_adj, node_h, v_gap, dummies):
     """One Brandes-Köpf alignment + compaction for a given graph orientation.
 
     *layer_order* is the layer stack top-to-bottom in this run's vertical
@@ -319,6 +319,13 @@ def _bk_run(layer_order, upper_adj, node_h, v_gap):
     layer of that orientation. Each node aligns to its median upper neighbour
     (left to right, so alignments never cross). Returns a cross-axis coordinate
     per node.
+
+    *Inner segments* -- edges between two dummy vertices, i.e. consecutive links
+    of a long edge's chain -- get priority via Brandes-Köpf type-1 conflict
+    marking: a non-inner segment that crosses an inner one is marked and skipped
+    during alignment, so a long edge's dummy chain aligns into a single straight
+    vertical block instead of stepping (the staircase a naive alignment produces
+    on long edges in dense graphs).
     """
     pos = {v: j for row in layer_order for j, v in enumerate(row)}
     upper = {
@@ -326,6 +333,32 @@ def _bk_run(layer_order, upper_adj, node_h, v_gap):
         for row in layer_order
         for v in row
     }
+
+    # Mark type-1 conflicts (Brandes-Köpf, Algorithm 1). For each adjacent layer
+    # pair, walk the lower layer between successive inner segments; any segment
+    # whose upper endpoint sits outside the [k0, k1] window the inner segments
+    # bound is a non-inner segment crossing an inner one -- mark it to skip.
+    marked: set[tuple[str, str]] = set()
+    for i in range(1, len(layer_order)):
+        lower = layer_order[i]
+        upper_len = len(layer_order[i - 1])
+        k0 = 0
+        scan = 0
+        last = len(lower) - 1
+        for l1, v in enumerate(lower):
+            inner_u = (
+                next((u for u in upper[v] if u in dummies), None)
+                if v in dummies
+                else None
+            )
+            if l1 == last or inner_u is not None:
+                k1 = pos[inner_u] if inner_u is not None else upper_len - 1
+                while scan <= l1:
+                    for u in upper[lower[scan]]:
+                        if pos[u] < k0 or pos[u] > k1:
+                            marked.add((u, lower[scan]))
+                    scan += 1
+                k0 = k1
 
     root = {v: v for row in layer_order for v in row}
     align = {v: v for row in layer_order for v in row}
@@ -339,7 +372,7 @@ def _bk_run(layer_order, upper_adj, node_h, v_gap):
             for m in ((d - 1) // 2, d // 2):  # one (odd) or two (even) medians
                 if align[v] == v:
                     u = ups[m]
-                    if r < pos[u]:
+                    if (u, v) not in marked and r < pos[u]:
                         align[u] = v
                         root[v] = root[u]
                         align[v] = root[u]
@@ -347,7 +380,7 @@ def _bk_run(layer_order, upper_adj, node_h, v_gap):
     return _bk_compaction(layer_order, root, align, node_h, v_gap)
 
 
-def _brandes_koepf(layers, up_adj, down_adj, node_h, v_gap):
+def _brandes_koepf(layers, up_adj, down_adj, node_h, v_gap, dummies):
     """Cross-axis (y) coordinate per node via Brandes-Köpf, four runs averaged.
 
     Runs the alignment from all four corners -- {align upward, downward} x
@@ -379,7 +412,7 @@ def _brandes_koepf(layers, up_adj, down_adj, node_h, v_gap):
         (reflect(order[::-1]), down_adj, -1),  # align down, pack the other
     ]
     coords = [
-        {v: sign * val for v, val in _bk_run(o, adj, node_h, v_gap).items()}
+        {v: sign * val for v, val in _bk_run(o, adj, node_h, v_gap, dummies).items()}
         for o, adj, sign in runs
     ]
     yc = {v: sum(c[v] for c in coords) / len(coords) for row in order for v in row}
@@ -393,7 +426,7 @@ def _brandes_koepf(layers, up_adj, down_adj, node_h, v_gap):
 
 
 def _assign_coordinates(
-    layers, up_adj, down_adj, node_w, node_h, h_gap, v_gap, x_offset, y_offset
+    layers, up_adj, down_adj, node_w, node_h, h_gap, v_gap, x_offset, y_offset, dummies
 ):
     """Stage 3 -- assign pixel coordinates to the ordered layers.
 
@@ -413,7 +446,7 @@ def _assign_coordinates(
         col_x[lyr] = x
         x += col_w[lyr] + h_gap
 
-    yc = _brandes_koepf(layers, up_adj, down_adj, node_h, v_gap)
+    yc = _brandes_koepf(layers, up_adj, down_adj, node_h, v_gap, dummies)
 
     # Normalise so the topmost node sits at y_offset.
     shift = y_offset - min((yc[n] - node_h[n] / 2 for n in yc), default=0.0)
@@ -519,6 +552,7 @@ def _sugiyama_layout(
         "node_layer": {},
         "back_edges": set(),
         "chains": {},
+        "v_gap": v_gap,
     }
     real_ids = list(elements_by_id.keys())
     if not real_ids:
@@ -557,6 +591,7 @@ def _sugiyama_layout(
         v_gap,
         x_offset,
         y_offset,
+        set(dummy_layer),
     )
 
     ctx = {
@@ -566,6 +601,7 @@ def _sugiyama_layout(
         "node_layer": node_layer,
         "back_edges": back_edges,
         "chains": chains,
+        "v_gap": v_gap,
     }
     return positions, ctx
 
@@ -609,6 +645,91 @@ def _simplify(pts):
             out.append(pts[i])
     out.append(pts[-1])
     return out
+
+
+def _nearest_free(cur, intervals):
+    """Nearest value to *cur* lying outside every ``(lo, hi)`` interval.
+
+    The intervals are the forbidden bands around obstacles; merging them and, if
+    *cur* sits inside one, snapping to the closer boundary gives the least move
+    that restores clearance.
+    """
+    merged: list[list[float]] = []
+    for lo, hi in sorted(intervals):
+        if merged and lo <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    for lo, hi in merged:
+        if lo <= cur <= hi:
+            return lo if cur - lo <= hi - cur else hi
+    return cur
+
+
+def _crosses_box(p, q, boxes):
+    """Whether the axis-aligned segment *p*-*q* passes through a box's interior."""
+    lox, hix = sorted((p[0], q[0]))
+    loy, hiy = sorted((p[1], q[1]))
+    for bx0, bx1, by0, by1 in boxes:
+        if hix <= bx0 or lox >= bx1 or hiy <= by0 or loy >= by1:
+            continue
+        return True
+    return False
+
+
+def _nudge_routes(routes, positions, min_gap):
+    """Edge-nudging phase: spread horizontal lanes that run closer than *min_gap*.
+
+    The standard final phase of an orthogonal edge router. Only *interior*
+    horizontal segments move, and only in y, so a segment docked at a node keeps
+    its port and the x-spans of every segment are preserved (moving in x would
+    drag connected horizontals and create new parallels -- measured net-negative,
+    so it is not done). A move is committed only when the shifted segment *and
+    its two connectors* stay clear of every node box, so a nudge can never push
+    an edge through a shape. Node placement is untouched.
+    """
+    boxes = [
+        (p["x"], p["x"] + p["w"], p["y"], p["y"] + p["h"])
+        for p in positions.values()
+        if p["w"] and p["h"]
+    ]
+    pts = {idx: [list(pt) for pt in r] for idx, r in routes.items()}
+    segs = []  # [route, seg_index, y, x_lo, x_hi, movable]
+    for idx, pl in pts.items():
+        n = len(pl)
+        for i in range(n - 1):
+            a, b = pl[i], pl[i + 1]
+            if abs(a[1] - b[1]) < 1 and abs(a[0] - b[0]) >= 1:  # horizontal
+                lo, hi = sorted((a[0], b[0]))
+                segs.append([idx, i, a[1], lo, hi, 0 < i < n - 2])
+    for s in segs:
+        idx, i, y, lo, hi, movable = s
+        if not movable:
+            continue
+        forb = []
+        for t in segs:
+            if t[0] != idx and min(hi, t[4]) - max(lo, t[3]) > 5:  # x-spans overlap
+                forb.append((t[2] - min_gap, t[2] + min_gap))
+        for x0, x1, y0, y1 in boxes:
+            if min(hi, x1) - max(lo, x0) > 5:
+                forb.append((y0 - min_gap, y1 + min_gap))
+        ny = _nearest_free(y, forb)
+        if abs(ny - y) <= 0.5:
+            continue
+        pl = pts[idx]
+        a, b = pl[i][:], pl[i + 1][:]
+        a[1] = b[1] = ny
+        # Committing also lengthens the two connector risers; only move if the
+        # lane and both connectors stay outside every shape.
+        if (
+            _crosses_box(a, b, boxes)
+            or _crosses_box(pl[i - 1], a, boxes)
+            or _crosses_box(b, pl[i + 2], boxes)
+        ):
+            continue
+        pl[i][1] = pl[i + 1][1] = ny
+        s[2] = ny  # later lanes separate against the moved position
+    return {idx: [tuple(pt) for pt in pl] for idx, pl in pts.items()}
 
 
 def _route_edges(positions, ctx, flows, strategy):
@@ -776,4 +897,9 @@ def _route_edges(positions, ctx, flows, strategy):
                 pts.reverse()
             routes[idx] = pts
 
+    routes = {idx: _simplify(pts) for idx, pts in routes.items()}
+    # Final pass: spread parallel segments that ended up too close (a per-edge
+    # router can't see cross-edge proximity). Then re-simplify to drop any point
+    # a nudge left collinear.
+    routes = _nudge_routes(routes, positions, max(15, ctx["v_gap"] * 0.2))
     return {idx: _simplify(pts) for idx, pts in routes.items()}
