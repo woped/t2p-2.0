@@ -40,6 +40,10 @@ def _set_arc_waypoints(arc_el, points, ns_prefix):
     graphics = arc_el.find(f"{ns_prefix}graphics")
     if graphics is None:
         graphics = ET.SubElement(arc_el, f"{ns_prefix}graphics")
+    # Drop any pre-existing bend points so re-laying-out an already-laid-out net
+    # replaces the route instead of stacking a second one on top of it.
+    for old in graphics.findall(f"{ns_prefix}position"):
+        graphics.remove(old)
     for px, py in points:
         ET.SubElement(
             graphics,
