@@ -869,13 +869,13 @@ def _route_edges(positions, ctx, flows, strategy):
                         r[nb_i][1] = ny
         return {idx: _simplify([tuple(p) for p in r]) for idx, r in pts.items()}
 
-    # Rework-loop entry. A long back-edge already arcs over (or under) the
-    # diagram, but it then drops into the gap beside its target and enters the
-    # target on the same side its forward flow leaves -- a needless jog plus two
-    # near-parallel stubs. Instead let it run on to the target's centre and drop
-    # straight into the target's top (or bottom) edge -- the conventional loop
-    # look. Only when that vertical approach is clear of every other node; else
-    # the side entry from _assign_ports stays.
+    # Rework-loop ends. A loop (long back-edge) otherwise leaves its source and
+    # enters its target on the SAME side the node's forward flow uses, so the two
+    # stubs run side by side -- the confusing parallel lines at a loop node.
+    # Route both loop ends through the node's TOP/BOTTOM edge instead, clearly
+    # apart from the horizontal forward edges. Only when the vertical approach is
+    # clear of every other node; else that end keeps its side dock. Forward edges
+    # are untouched.
     long_back = {
         i for i, f in enumerate(flows) if (_span(f) is not None and _span(f) <= -2)
     }
@@ -896,26 +896,44 @@ def _route_edges(positions, ctx, flows, strategy):
             return False
         return True
 
-    def _loop_top_entry(rts):
+    def _vertical_end(r, node, at_source):
+        """Reroute one end of a loop to leave/enter *node* through its TOP/BOTTOM
+        edge instead of the side. ``at_source`` reworks the head (the loop leaving
+        its source); otherwise the tail (entering its target). No-op unless the
+        end is the usual ``lane -> vertical -> side stub`` shape and the vertical
+        approach at the node centre is clear of every other node."""
+        box = positions[node]
+        if at_source:  # head: side stub D -> vertical B -> lane point A
+            d, b, a = r[0], r[1], r[2]
+        else:  # tail: lane point A -> vertical B -> side stub D
+            a, b, d = r[-3], r[-2], r[-1]
+        if not (abs(d[1] - b[1]) < 1 and abs(b[0] - a[0]) < 1):
+            return r
+        cx = box["x"] + box["w"] / 2
+        if box["y"] <= a[1] <= box["y"] + box["h"] or abs(a[0] - cx) < 1:
+            return r
+        edge_y = box["y"] if a[1] < box["y"] + box["h"] / 2 else box["y"] + box["h"]
+        lane, edge = (cx, a[1]), (cx, edge_y)
+        if not (_clear(a, lane, node) and _clear(lane, edge, node)):
+            return r
+        return [edge, lane] + list(r[2:]) if at_source else list(r[:-2]) + [lane, edge]
+
+    def _loop_vertical_ends(rts):
+        # A loop must not draw its stub on the same node side as the forward edge
+        # there: route both ends through the TOP/BOTTOM edge. Target end first,
+        # then the source end (only when the route is long enough that the two
+        # ends do not share points).
         out = dict(rts)
         for idx in long_back:
-            r = rts.get(idx)
-            tgt = flows[idx]["target"]
-            if not r or len(r) < 3 or tgt not in positions:
+            r = list(rts.get(idx) or [])
+            if len(r) < 3:
                 continue
-            box = positions[tgt]
-            a, b, d = r[-3], r[-2], r[-1]
-            # tail must be lane point A -> vertical drop -> horizontal side stub,
-            # with A sitting clear above or below the node (not level with it)
-            if not (abs(d[1] - b[1]) < 1 and abs(b[0] - a[0]) < 1):
-                continue
-            cx = box["x"] + box["w"] / 2
-            if box["y"] <= a[1] <= box["y"] + box["h"] or abs(a[0] - cx) < 1:
-                continue
-            edge_y = box["y"] if a[1] < box["y"] + box["h"] / 2 else box["y"] + box["h"]
-            p1, p2 = (cx, a[1]), (cx, edge_y)
-            if _clear(a, p1, tgt) and _clear(p1, p2, tgt):
-                out[idx] = _simplify(list(r[:-2]) + [p1, p2])
+            tgt, src = flows[idx]["target"], flows[idx]["source"]
+            if tgt in positions:
+                r = _vertical_end(r, tgt, at_source=False)
+            if src in positions and len(r) >= 5:
+                r = _vertical_end(r, src, at_source=True)
+            out[idx] = _simplify(r)
         return out
 
-    return _loop_top_entry(_assign_ports(routes))
+    return _loop_vertical_ends(_assign_ports(routes))
