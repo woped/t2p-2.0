@@ -869,4 +869,53 @@ def _route_edges(positions, ctx, flows, strategy):
                         r[nb_i][1] = ny
         return {idx: _simplify([tuple(p) for p in r]) for idx, r in pts.items()}
 
-    return _assign_ports(routes)
+    # Rework-loop entry. A long back-edge already arcs over (or under) the
+    # diagram, but it then drops into the gap beside its target and enters the
+    # target on the same side its forward flow leaves -- a needless jog plus two
+    # near-parallel stubs. Instead let it run on to the target's centre and drop
+    # straight into the target's top (or bottom) edge -- the conventional loop
+    # look. Only when that vertical approach is clear of every other node; else
+    # the side entry from _assign_ports stays.
+    long_back = {
+        i for i, f in enumerate(flows) if (_span(f) is not None and _span(f) <= -2)
+    }
+    boxes = {
+        nid: (p["x"], p["x"] + p["w"], p["y"], p["y"] + p["h"])
+        for nid, p in positions.items()
+        if p["w"] and p["h"]
+    }
+
+    def _clear(p, q, skip):
+        lox, hix = sorted((p[0], q[0]))
+        loy, hiy = sorted((p[1], q[1]))
+        for nid, (x0, x1, y0, y1) in boxes.items():
+            if nid == skip:
+                continue
+            if hix <= x0 + 2 or lox >= x1 - 2 or hiy <= y0 + 2 or loy >= y1 - 2:
+                continue
+            return False
+        return True
+
+    def _loop_top_entry(rts):
+        out = dict(rts)
+        for idx in long_back:
+            r = rts.get(idx)
+            tgt = flows[idx]["target"]
+            if not r or len(r) < 3 or tgt not in positions:
+                continue
+            box = positions[tgt]
+            a, b, d = r[-3], r[-2], r[-1]
+            # tail must be lane point A -> vertical drop -> horizontal side stub,
+            # with A sitting clear above or below the node (not level with it)
+            if not (abs(d[1] - b[1]) < 1 and abs(b[0] - a[0]) < 1):
+                continue
+            cx = box["x"] + box["w"] / 2
+            if box["y"] <= a[1] <= box["y"] + box["h"] or abs(a[0] - cx) < 1:
+                continue
+            edge_y = box["y"] if a[1] < box["y"] + box["h"] / 2 else box["y"] + box["h"]
+            p1, p2 = (cx, a[1]), (cx, edge_y)
+            if _clear(a, p1, tgt) and _clear(p1, p2, tgt):
+                out[idx] = _simplify(list(r[:-2]) + [p1, p2])
+        return out
+
+    return _loop_top_entry(_assign_ports(routes))
