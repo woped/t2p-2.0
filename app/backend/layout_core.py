@@ -17,17 +17,18 @@ The three placement stages each use their textbook-grade variant:
    averaged, which stays overlap-free) so straight runs stay aligned without the
    diagonal drift of a single-corner placement.
 
-Edges spanning more than one layer (forward skips and reversed back-edges) get
-interior *dummy vertices* -- one per skipped layer -- from
-:func:`_insert_dummies`. The dummies take part in ordering and coordinate
-assignment like any node, so a long edge threads cleanly between the shapes of
-the layers it crosses (the formal Sugiyama long-edge model). :func:`_route_edges`
-then draws each edge as a straight polyline through its dummy centres (a span-1
-edge is just a straight line) -- the textbook drawing. Because straight segments
-leave a node at distinct angles, edges fan apart and never run on the same
-pixels; the only exceptions a straight line cannot tell apart -- several edges
-between the same node pair, and self-loops -- are bowed apart / drawn as a small
-loop. No orthogonal channels or general ports: those are not part of the model.
+Edges spanning more than one layer (forward skips and reversed back-edges) are
+broken into unit segments through interior *dummy vertices* -- one per skipped
+layer -- by :func:`_insert_dummies`. The dummies take part in ordering and
+coordinate assignment like any node, so a long edge threads cleanly between the
+shapes of the layers it crosses (the formal Sugiyama long-edge model) instead of
+detouring around the diagram. :func:`_route_edges` then routes *every* unit
+segment of the proper graph by one rule -- a real adjacent edge and a link of a
+dummy chain are indistinguishable -- so long and short edges from a split share
+the same trunk. Only the degenerate cases a dummy cannot help -- self-loops
+and back-edges between adjacent (or the same) layers, where no interior layer
+exists -- still fall back to a horizontal lane below the diagram in
+:func:`_route_edges`.
 """
 
 from collections import deque, defaultdict
@@ -546,6 +547,8 @@ def _sugiyama_layout(
     """
     empty_ctx = {
         "centers": {},
+        "col_x": {},
+        "col_w": {},
         "node_layer": {},
         "back_edges": set(),
         "chains": {},
@@ -577,7 +580,7 @@ def _sugiyama_layout(
 
     layers, up_adj, down_adj = _order_layers(aug_layer, unit_edges)
 
-    positions, centers, _col_x, _col_w = _assign_coordinates(
+    positions, centers, col_x, col_w = _assign_coordinates(
         layers,
         up_adj,
         down_adj,
@@ -592,11 +595,37 @@ def _sugiyama_layout(
 
     ctx = {
         "centers": centers,
+        "col_x": col_x,
+        "col_w": col_w,
         "node_layer": node_layer,
         "back_edges": back_edges,
         "chains": chains,
     }
     return positions, ctx
+
+
+def _loop_waypoints(src, tgt, lane_y):
+    """Route a degenerate loop as a U through the *lane_y* corridor.
+
+    Used only for back-edges between adjacent (or the same) layers and
+    self-loops -- the cases with no interior layer for a dummy to thread. A
+    straight route would cut back across the columns, so the edge drops into a
+    dedicated lane below the diagram; the caller picks a distinct *lane_y* per
+    edge so lanes do not overlap.
+    """
+    sx = src["x"] + src["w"]
+    sy = src["y"] + src["h"] // 2
+    tx = tgt["x"]
+    ty = tgt["y"] + tgt["h"] // 2
+    margin = 30
+    return [
+        (sx, sy),
+        (sx + margin, sy),
+        (sx + margin, lane_y),
+        (tx - margin, lane_y),
+        (tx - margin, ty),
+        (tx, ty),
+    ]
 
 
 def _simplify(pts):
@@ -617,85 +646,276 @@ def _simplify(pts):
 
 
 def _route_edges(positions, ctx, flows, strategy):
-    """Draw each edge as a straight polyline through its dummy vertices.
+    """Compute waypoint polylines for *flows*, keyed by flow index.
 
-    The canonical Sugiyama edge drawing: a span-1 edge is a straight segment and
-    a longer edge a polyline through its dummy chain (``ctx["chains"]``); a
-    back-edge is drawn in its original direction by walking its chain from the
-    target. Straight segments leave each node at a distinct angle, so edges fan
-    apart instead of sharing an axis-aligned stub -- no two run on the same
-    pixels. The only cases a straight line cannot tell apart are handled
-    explicitly: several edges between the same node pair (a forward and its
-    back-edge, or duplicates) are bowed apart, and a self-loop is drawn as a
-    small loop.
+    Returns ``{index: [(x, y), ...]}``; each polyline includes its end anchors.
 
-    The polyline is the same for both formats (it runs node centre to node
-    centre); ``strategy`` is kept for the callers but no longer branches the
-    geometry. The PNML writer drops the centre anchors (the client re-derives the
-    endpoints), the BPMN writer keeps them and bpmn-js crops to the node border.
-    There are no orthogonal channels, bundling or general ports -- those were
-    never part of the layered-drawing model.
+    Routing follows the *proper graph*: a long edge is a chain of unit segments
+    through its dummy vertices (``ctx["chains"]``), and **every** unit segment --
+    a real adjacent-layer edge or one link of a dummy chain -- is routed by the
+    same rule. A height-changing segment turns through a vertical channel in its
+    column gap; segments sharing an endpoint (a split source ``a`` or a join
+    target ``b``) bundle onto one channel, so a gateway's whole fan -- short
+    branches and long skips alike -- rides a single trunk instead of stacking
+    separate overlapping stubs. A flat segment is a straight line.
+
+    ``strategy`` only changes a *flat, single-segment* real edge: ``"sparse"``
+    (PNML) leaves it waypoint-free (``[]``) for the client to draw straight,
+    ``"full_ortho"`` (BPMN) emits its two anchors explicitly. Degenerate loops a
+    dummy cannot help -- self-loops and back-edges between adjacent (or the same)
+    layers -- go through a horizontal lane below the diagram.
+
+    A final *port* pass (:func:`_assign_ports`, below) then offsets each
+    back-edge's dock off the node centre, so an incoming back-edge never lands on
+    the point a node's forward edges use (which rendered as one line with an
+    arrowhead at each end). Forward edges keep the centre -- their fan stays a
+    single comb.
     """
     centers = ctx["centers"]
+    col_x = ctx["col_x"]
+    col_w = ctx["col_w"]
     node_layer = ctx["node_layer"]
     chains = ctx["chains"]
 
     def _span(flow):
-        s, t = flow.get("source"), flow.get("target")
-        if s not in node_layer or t not in node_layer:
+        """Layer distance target - source, or None if an endpoint is missing."""
+        src, tgt = flow.get("source"), flow.get("target")
+        if src not in node_layer or tgt not in node_layer:
             return None
-        return node_layer[t] - node_layer[s]
+        return node_layer[tgt] - node_layer[src]
 
-    def _self_loop(box):
-        """A self-edge has no straight drawing: a small loop above the node."""
-        cx = box["x"] + box["w"] / 2
-        g = 18
-        return [
-            (box["x"] + box["w"], box["y"] + box["h"] / 2),
-            (box["x"] + box["w"] + g, box["y"] + box["h"] / 2),
-            (box["x"] + box["w"] + g, box["y"] - g),
-            (cx, box["y"] - g),
-            (cx, box["y"]),
-        ]
+    # Decompose every routed edge into the proper graph's unit (adjacent-layer)
+    # segments: the real endpoints plus the edge's dummy vertices, ordered low
+    # layer to high. A span-1 edge is one segment; a long edge (forward skip or
+    # back-edge) is its dummy chain. ``seg_lists`` keeps each flow's segments in
+    # ascending-layer order for re-assembly; ``segs_by_gap`` groups the
+    # height-changing ones by column gap for channel assignment.
+    seg_lists: dict[int, list] = {}
+    segs_by_gap: dict[int, list] = defaultdict(list)
+    for idx, flow in enumerate(flows):
+        span = _span(flow)
+        if span is None or -1 <= span <= 0:
+            continue  # unrouted, or a degenerate loop (laned below)
+        src, tgt = flow["source"], flow["target"]
+        path = (
+            [src, *chains.get(idx, []), tgt]
+            if span > 0
+            else [tgt, *chains.get(idx, []), src]
+        )
+        lo_layer = node_layer[path[0]]
+        segs = []
+        for i, (a, b) in enumerate(zip(path, path[1:])):
+            seg = {
+                "a": a,
+                "b": b,
+                "layer": lo_layer + i,
+                "y1": centers[a][1],
+                "y2": centers[b][1],
+                "channel": None,
+                # A back-edge is laid out reversed (low->high), so at a node its
+                # segment looks like an out-segment but is really the incoming
+                # arc. Carry the flag so channel bundling never merges an
+                # incoming back-edge with that node's real outgoing arcs.
+                "back": span < 0,
+            }
+            segs.append(seg)
+            if abs(seg["y1"] - seg["y2"]) >= 1:
+                segs_by_gap[seg["layer"]].append(seg)
+        seg_lists[idx] = segs
+
+    # Assign a vertical channel per gap. A gateway's fan (segments sharing a
+    # source/split or target/join) bundles onto ONE shared trunk -- this is the
+    # clean orthogonal "comb" the fat client produces, for both BPMN and PNML.
+    # (Giving every arc its own channel instead staggers the branches into
+    # crooked steps, so it is not done.) The key includes the edge's real
+    # direction (``back``) so an incoming back-edge never shares a node's
+    # outgoing trunk -- which made the node look mid-line instead of an endpoint.
+    for lyr, segs in segs_by_gap.items():
+        gap_lo = col_x[lyr] + col_w[lyr]
+        gap_hi = col_x[lyr + 1]
+        out_count: dict[tuple, int] = defaultdict(int)
+        in_count: dict[tuple, int] = defaultdict(int)
+        for s in segs:
+            out_count[(s["a"], s["back"])] += 1
+            in_count[(s["b"], s["back"])] += 1
+        bundles: dict[tuple, list] = {}
+        for s in segs:
+            if in_count[(s["b"], s["back"])] > 1:
+                key = ("in", s["b"], s["back"])
+            elif out_count[(s["a"], s["back"])] > 1:
+                key = ("out", s["a"], s["back"])
+            else:
+                key = ("single", id(s))
+            bundles.setdefault(key, []).append(s)
+        kind_rank = {"out": 0, "single": 1, "in": 2}
+
+        def _bundle_key(key):
+            ys = [(s["y1"] + s["y2"]) / 2 for s in bundles[key]]
+            return (kind_rank[key[0]], sum(ys) / len(ys))
+
+        ordered = sorted(bundles, key=_bundle_key)
+        count = len(ordered)
+        for i, key in enumerate(ordered):
+            channel = gap_lo + (i + 1) * (gap_hi - gap_lo) / (count + 1)
+            for s in bundles[key]:
+                s["channel"] = channel
+
+    def _seg_points(s):
+        """Orthogonal points for one segment, low-layer (left) end first."""
+        ax = positions[s["a"]]["x"] + positions[s["a"]]["w"]  # right of a
+        bx = positions[s["b"]]["x"]  # left of b
+        if s["channel"] is None:  # flat -> straight
+            return [(ax, s["y1"]), (bx, s["y2"])]
+        ch = s["channel"]
+        return [(ax, s["y1"]), (ch, s["y1"]), (ch, s["y2"]), (bx, s["y2"])]
+
+    bottom_y = max((p["y"] + p["h"] for p in positions.values()), default=0)
+
+    def _loop_span(idx):
+        src = positions[flows[idx]["source"]]
+        tgt = positions[flows[idx]["target"]]
+        return abs((src["x"] + src["w"]) - tgt["x"])
+
+    # Degenerate loops (self-loops and back-edges between adjacent or the same
+    # layer) have no interior layer to thread, so each gets its own lane below
+    # the diagram; narrower loops take the shallower lanes so wider ones nest
+    # underneath.
+    loop_indices = sorted(
+        (
+            i
+            for i, flow in enumerate(flows)
+            if (_span(flow) is not None and -1 <= _span(flow) <= 0)
+            and flow["source"] in positions
+            and flow["target"] in positions
+        ),
+        key=_loop_span,
+    )
+    loop_lane = {idx: bottom_y + 50 + k * 45 for k, idx in enumerate(loop_indices)}
 
     routes: dict[int, list] = {}
     for idx, flow in enumerate(flows):
-        s, t = flow.get("source"), flow.get("target")
-        if s not in positions or t not in positions:
+        span = _span(flow)
+        if span is None:
             routes[idx] = []
-            continue
-        if s == t:
-            routes[idx] = _self_loop(positions[s])
-            continue
-        chain = chains.get(idx, [])
-        # the chain is stored low-layer to high; a back-edge (drawn target-first)
-        # walks it in reverse so the polyline still runs source -> target.
-        seq = list(reversed(chain)) if (_span(flow) or 0) < 0 else chain
-        routes[idx] = _simplify([centers[s], *(centers[d] for d in seq), centers[t]])
+        elif -1 <= span <= 0:
+            # Degenerate loop / same-layer: U through its lane below the diagram.
+            routes[idx] = (
+                _loop_waypoints(
+                    positions[flow["source"]], positions[flow["target"]], loop_lane[idx]
+                )
+                if idx in loop_lane
+                else []
+            )
+        else:
+            segs = seg_lists[idx]
+            # A flat single-segment real edge: PNML leaves the straight line to
+            # the client; BPMN emits its two anchors (handled by re-assembly).
+            if strategy == "sparse" and len(segs) == 1 and segs[0]["channel"] is None:
+                routes[idx] = []
+                continue
+            pts: list = []
+            for s in segs:
+                seg_pts = _seg_points(s)
+                if pts and pts[-1] == seg_pts[0]:  # drop the shared dummy junction
+                    seg_pts = seg_pts[1:]
+                pts.extend(seg_pts)
+            if span < 0:  # back-edge: emit the polyline source -> target
+                pts.reverse()
+            routes[idx] = pts
 
-    # Separate edges a straight line cannot tell apart: several edges between the
-    # same unordered node pair collapse onto one line (a forward and its
-    # back-edge run on identical pixels in opposite directions -- an arrow that
-    # looks two-headed). Bow each such straight edge's midpoint to one side by a
-    # distinct amount so each keeps its own line and arrowhead. This is the only
-    # "port"-style offset needed; edges that leave at an angle already separate.
-    groups: dict[tuple, list] = defaultdict(list)
-    for idx, flow in enumerate(flows):
-        s, t = flow.get("source"), flow.get("target")
-        if s != t and s in positions and t in positions:
-            groups[tuple(sorted((s, t)))].append(idx)
-    for (a, b), idxs in groups.items():
-        straight = [i for i in idxs if len(routes[i]) == 2]
-        if len(straight) < 2:
-            continue
-        ax, ay = centers[a]
-        bx, by = centers[b]
-        length = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5 or 1.0
-        px, py = -(by - ay) / length, (bx - ax) / length  # unit perpendicular
-        for k, idx in enumerate(straight):
-            off = (k - (len(straight) - 1) / 2) * 14
-            sc = centers[flows[idx]["source"]]
-            tc = centers[flows[idx]["target"]]
-            mid = ((sc[0] + tc[0]) / 2 + px * off, (sc[1] + tc[1]) / 2 + py * off)
-            routes[idx] = [sc, mid, tc]
-    return routes
+    routes = {idx: _simplify(pts) for idx, pts in routes.items()}
+
+    # Port assignment. A back-edge docks unconventionally -- its target on the
+    # right, its source on the left -- i.e. on the very side a node's forward
+    # edges use, so its end stub lands on the forward edge's stub: one line with
+    # an arrowhead at both ends. Offset each back-edge's dock off the node centre
+    # (toward the side its route bends to, so no jog) and spread several apart;
+    # forward edges keep the centre, so their split/join fan (the comb) is intact.
+    back = {i for i, f in enumerate(flows) if (_span(f) is not None and _span(f) <= 0)}
+
+    def _assign_ports(rts):
+        pts = {idx: [list(p) for p in r] for idx, r in rts.items()}
+        docks: dict[tuple, list] = defaultdict(list)
+        for idx in back:
+            r = pts.get(idx)
+            if not r or len(r) < 2:
+                continue
+            f = flows[idx]
+            for end_i, nb_i, node in ((0, 1, f["source"]), (-1, -2, f["target"])):
+                if node not in positions:
+                    continue
+                box = positions[node]
+                side = "R" if r[end_i][0] >= box["x"] + box["w"] / 2 else "L"
+                docks[(node, side)].append((idx, end_i, nb_i))
+        for (node, _side), ends in docks.items():
+            box = positions[node]
+            cy = box["y"] + box["h"] / 2
+            above = sorted(
+                (e for e in ends if pts[e[0]][e[2]][1] <= cy),
+                key=lambda e: -pts[e[0]][e[2]][1],
+            )
+            below = sorted(
+                (e for e in ends if pts[e[0]][e[2]][1] > cy),
+                key=lambda e: pts[e[0]][e[2]][1],
+            )
+            for group, sign in ((above, -1), (below, 1)):
+                step = min(box["h"] / 2 / (len(group) + 1), 16)
+                for k, (idx, end_i, nb_i) in enumerate(group):
+                    r = pts[idx]
+                    # only the usual horizontal dock stub can shift in y
+                    if abs(r[end_i][1] - r[nb_i][1]) < 1 and r[end_i][0] != r[nb_i][0]:
+                        ny = cy + sign * (k + 1) * step
+                        r[end_i][1] = ny
+                        r[nb_i][1] = ny
+        return {idx: _simplify([tuple(p) for p in r]) for idx, r in pts.items()}
+
+    # Rework-loop entry. A long back-edge already arcs over (or under) the
+    # diagram, but it then drops into the gap beside its target and enters the
+    # target on the same side its forward flow leaves -- a needless jog plus two
+    # near-parallel stubs. Instead let it run on to the target's centre and drop
+    # straight into the target's top (or bottom) edge -- the conventional loop
+    # look. Only when that vertical approach is clear of every other node; else
+    # the side entry from _assign_ports stays.
+    long_back = {
+        i for i, f in enumerate(flows) if (_span(f) is not None and _span(f) <= -2)
+    }
+    boxes = {
+        nid: (p["x"], p["x"] + p["w"], p["y"], p["y"] + p["h"])
+        for nid, p in positions.items()
+        if p["w"] and p["h"]
+    }
+
+    def _clear(p, q, skip):
+        lox, hix = sorted((p[0], q[0]))
+        loy, hiy = sorted((p[1], q[1]))
+        for nid, (x0, x1, y0, y1) in boxes.items():
+            if nid == skip:
+                continue
+            if hix <= x0 + 2 or lox >= x1 - 2 or hiy <= y0 + 2 or loy >= y1 - 2:
+                continue
+            return False
+        return True
+
+    def _loop_top_entry(rts):
+        out = dict(rts)
+        for idx in long_back:
+            r = rts.get(idx)
+            tgt = flows[idx]["target"]
+            if not r or len(r) < 3 or tgt not in positions:
+                continue
+            box = positions[tgt]
+            a, b, d = r[-3], r[-2], r[-1]
+            # tail must be lane point A -> vertical drop -> horizontal side stub,
+            # with A sitting clear above or below the node (not level with it)
+            if not (abs(d[1] - b[1]) < 1 and abs(b[0] - a[0]) < 1):
+                continue
+            cx = box["x"] + box["w"] / 2
+            if box["y"] <= a[1] <= box["y"] + box["h"] or abs(a[0] - cx) < 1:
+                continue
+            edge_y = box["y"] if a[1] < box["y"] + box["h"] / 2 else box["y"] + box["h"]
+            p1, p2 = (cx, a[1]), (cx, edge_y)
+            if _clear(a, p1, tgt) and _clear(p1, p2, tgt):
+                out[idx] = _simplify(list(r[:-2]) + [p1, p2])
+        return out
+
+    return _loop_top_entry(_assign_ports(routes))
