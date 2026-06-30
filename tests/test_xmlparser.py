@@ -407,10 +407,9 @@ def test_assign_pnml_coordinates_routes_back_edge_loops():
     """A back-edge (rework loop) must get explicit arc bend points so every
     client renders the loop the same way instead of auto-routing it.
 
-    Spanning more than one layer, the loop threads over the diagram (formal
-    Sugiyama long-edge routing, not a lane below) and drops straight down into
-    its target's top, rather than crowding the side the target's forward flow
-    leaves from."""
+    Spanning more than one layer, the loop threads through its interior dummy
+    column(s) -- formal Sugiyama long-edge routing -- rather than detouring in a
+    lane below the diagram."""
     pnml = (
         "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
         "<place id='p1'/>"
@@ -444,11 +443,11 @@ def test_assign_pnml_coordinates_routes_back_edge_loops():
     assert len(waypoints["a4"]) >= 1, "loop arc got no bend points"
     assert waypoints["a1"] == []
 
-    # The loop drops straight down into the target's top: its final bend sits in
-    # the target's column (a vertical approach), coming from above its centre --
-    # not crowding the target's side.
-    assert waypoints["a4"][-1][0] == centers["review"][0], waypoints["a4"]
-    assert waypoints["a4"][-1][1] < centers["review"][1], waypoints["a4"]
+    # Each bend threads through an interior column (its x lies strictly between
+    # the loop's endpoints), not a lane off to the side of the diagram.
+    lo_x = min(centers["review"][0], centers["rework"][0])
+    hi_x = max(centers["review"][0], centers["rework"][0])
+    assert all(lo_x < x < hi_x for x, _ in waypoints["a4"]), waypoints["a4"]
 
 
 def test_assign_pnml_coordinates_straightens_multi_layer_arc():
