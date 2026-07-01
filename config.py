@@ -32,6 +32,25 @@ class Config:
         os.environ.get("CONNECTOR_ASYNC_MAX_WAIT_SECONDS") or 120
     )
 
+    # Connector call behaviour. Generation is driven through the connector's
+    # internal async submit/poll endpoints (so the long generation is not held
+    # open on one request); the sync /generate is the fallback. CONNECTOR_TIMEOUT
+    # bounds a single HTTP call; CONNECTOR_ASYNC_MAX_WAIT_SECONDS bounds the whole
+    # poll loop (the real "how long do we wait for a result" knob).
+    CONNECTOR_TIMEOUT = int(os.environ.get("CONNECTOR_TIMEOUT") or 300)
+    CONNECTOR_INTERNAL_ASYNC_ENABLED = os.environ.get(
+        "CONNECTOR_INTERNAL_ASYNC_ENABLED", "true"
+    ).lower() in {"1", "true", "yes", "on"}
+    CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC = os.environ.get(
+        "CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC", "true"
+    ).lower() in {"1", "true", "yes", "on"}
+    CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS = float(
+        os.environ.get("CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS") or 2.0
+    )
+    CONNECTOR_ASYNC_MAX_WAIT_SECONDS = float(
+        os.environ.get("CONNECTOR_ASYNC_MAX_WAIT_SECONDS") or 300
+    )
+
     # Server configuration
     T2P_FLASK_PORT = int(os.environ.get("FLASK_PORT") or 5000)
     T2P_FLASK_HOST = os.environ.get("FLASK_HOST") or "127.0.0.1"

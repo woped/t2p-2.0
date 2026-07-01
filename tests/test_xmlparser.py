@@ -1,14 +1,8 @@
 import xml.etree.ElementTree as ET
 
 import pytest
-from app.backend.xml_parser import (
-    assign_pnml_coordinates,
-    json_to_bpmn,
-    PnmlStructureError,
-    repair_pnml_connectivity_from_bpmn,
-    sanitize_bpmn_for_transform,
-    validate_pnml_connectivity,
-)
+from app.backend.bpmn_writer import laid_out_bpmn, semantic_bpmn
+from app.backend.pnml_writer import assign_pnml_coordinates
 
 _BPMNDI = "http://www.omg.org/spec/BPMN/20100524/DI"
 
@@ -56,8 +50,8 @@ def example_data():
     }
 
 
-def test_json_to_bpmn_generates_xml(example_data):
-    result = json_to_bpmn(example_data)
+def test_laid_out_bpmn_generates_xml(example_data):
+    result = laid_out_bpmn(example_data)
 
     # Prüfen, ob der Output ein gültiger XML-String ist
     assert isinstance(result, str)
@@ -66,20 +60,31 @@ def test_json_to_bpmn_generates_xml(example_data):
     assert "startEvent1" in result
     assert "task1" in result
     assert "endEvent1" in result
+    # <incoming>/<outgoing> are transformer-only and must NOT be in client BPMN.
+    assert "<outgoing>" not in result
+    assert "<incoming>" not in result
 
 
-def test_json_to_bpmn_accepts_connector_event_type_names(example_data):
+def test_semantic_bpmn_keeps_flow_references(example_data):
+    # The transformer reads node in/out degree from <incoming>/<outgoing>, so the
+    # semantic (transformer-feeding) BPMN keeps them -- unlike laid_out_bpmn.
+    result = semantic_bpmn(example_data)
+    assert "<outgoing>flow1</outgoing>" in result
+    assert "<incoming>flow1</incoming>" in result
+
+
+def test_laid_out_bpmn_accepts_connector_event_type_names(example_data):
     example_data["events"][0]["type"] = "startEvent"
     example_data["events"][1]["type"] = "endEvent"
 
-    result = json_to_bpmn(example_data)
+    result = laid_out_bpmn(example_data)
 
     assert "<startEvent" in result
     assert "<endEvent" in result
     assert "intermediateCatchEvent" not in result
 
 
-def test_json_to_bpmn_with_gateways():
+def test_laid_out_bpmn_with_gateways():
     """Test BPMN generation with gateways"""
     data = {
         "events": [
@@ -112,13 +117,13 @@ def test_json_to_bpmn_with_gateways():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert "gateway1" in result
     assert "ExclusiveGateway" in result or "exclusiveGateway" in result
 
 
-def test_json_to_bpmn_with_multiple_tasks():
+def test_laid_out_bpmn_with_multiple_tasks():
     """Test BPMN generation with multiple tasks"""
     data = {
         "events": [
@@ -159,7 +164,7 @@ def test_json_to_bpmn_with_multiple_tasks():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert "task1" in result
     assert "task2" in result
@@ -169,7 +174,7 @@ def test_json_to_bpmn_with_multiple_tasks():
     assert "Task 3" in result
 
 
-def test_json_to_bpmn_with_parallel_gateway():
+def test_laid_out_bpmn_with_parallel_gateway():
     """Test BPMN generation with parallel gateway"""
     data = {
         "events": [
@@ -200,13 +205,46 @@ def test_json_to_bpmn_with_parallel_gateway():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert "gateway1" in result
     assert "ParallelGateway" in result or "parallelGateway" in result
 
 
-def test_json_to_bpmn_empty_arrays():
+def test_exclusive_gateway_shape_marks_marker_visible():
+    """The XOR marker is optional in BPMN -- bpmn-js only draws the X when the
+    shape carries isMarkerVisible="true". Parallel gateways always show their +,
+    so the flag must be set for exclusive gateways (and only those) to keep XOR
+    and AND visually distinct."""
+    data = {
+        "events": [
+            {"id": "start1", "type": "Start", "name": "Start"},
+            {"id": "end1", "type": "End", "name": "End"},
+        ],
+        "tasks": [{"id": "task1", "name": "Task 1", "type": "UserTask"}],
+        "gateways": [
+            {"id": "xor1", "type": "ExclusiveGateway", "name": "Decision"},
+            {"id": "and1", "type": "ParallelGateway", "name": "Split"},
+        ],
+        "flows": [
+            {"id": "f1", "source": "start1", "target": "xor1", "type": "SequenceFlow"},
+            {"id": "f2", "source": "xor1", "target": "and1", "type": "SequenceFlow"},
+            {"id": "f3", "source": "and1", "target": "task1", "type": "SequenceFlow"},
+            {"id": "f4", "source": "task1", "target": "end1", "type": "SequenceFlow"},
+        ],
+    }
+
+    root = _parse(laid_out_bpmn(data))
+    marker_by_element = {
+        shape.get("bpmnElement"): shape.get("isMarkerVisible")
+        for shape in root.iter(f"{{{_BPMNDI}}}BPMNShape")
+    }
+
+    assert marker_by_element["xor1"] == "true"
+    assert marker_by_element["and1"] is None
+
+
+def test_laid_out_bpmn_empty_arrays():
     """Test BPMN generation with minimal data"""
     data = {
         "events": [
@@ -225,7 +263,7 @@ def test_json_to_bpmn_empty_arrays():
         ],
     }
 
-    result = json_to_bpmn(data)
+    result = laid_out_bpmn(data)
 
     assert isinstance(result, str)
     assert "<?xml" in result
@@ -260,7 +298,7 @@ def test_cyclic_process_lays_out_every_node_and_flow():
         ],
     }
 
-    root = _parse(json_to_bpmn(data))
+    root = _parse(laid_out_bpmn(data))
     counts = _local_counts(root)
 
     # One shape per node (2 events + 2 tasks) and one edge per flow (4).
@@ -268,7 +306,7 @@ def test_cyclic_process_lays_out_every_node_and_flow():
     assert counts.get("BPMNEdge") == 4
     assert counts.get("sequenceFlow") == 4
     for node_id in ("start", "end", "review", "rework"):
-        assert node_id in json_to_bpmn(data)
+        assert node_id in laid_out_bpmn(data)
 
 
 def test_empty_model_produces_wellformed_empty_diagram():
@@ -279,7 +317,7 @@ def test_empty_model_produces_wellformed_empty_diagram():
     """
     data = {"events": [], "tasks": [], "gateways": [], "flows": []}
 
-    root = _parse(json_to_bpmn(data))
+    root = _parse(laid_out_bpmn(data))
     counts = _local_counts(root)
 
     assert counts.get("process") == 1
@@ -307,7 +345,7 @@ def test_special_characters_in_names_produce_wellformed_xml():
         ],
     }
 
-    root = _parse(json_to_bpmn(data))
+    root = _parse(laid_out_bpmn(data))
 
     names = {el.get("name") for el in root.iter() if el.get("name") is not None}
     assert 'R&D <review> "now"' in names
@@ -330,7 +368,7 @@ def test_unknown_event_type_maps_to_intermediate_catch_event():
         ],
     }
 
-    counts = _local_counts(_parse(json_to_bpmn(data)))
+    counts = _local_counts(_parse(laid_out_bpmn(data)))
     assert counts.get("intermediateCatchEvent") == 1
     assert counts.get("startEvent") == 1
     assert counts.get("endEvent") == 1
@@ -361,8 +399,104 @@ def test_assign_pnml_coordinates_lays_out_each_node():
 
     # Every node is positioned, and the layered layout spreads them out
     # (not all stacked on the same placeholder coordinate).
-    assert set(coords) == {"P1", "t1", "P2"}
+    assert set(coords) == {"p1", "t1", "p2"}
     assert len(set(coords.values())) == 3
+
+
+def test_assign_pnml_coordinates_routes_back_edge_loops():
+    """A back-edge (rework loop) must get explicit arc bend points so every
+    client renders the loop the same way instead of auto-routing it.
+
+    Spanning more than one layer, the loop threads over the diagram (formal
+    Sugiyama long-edge routing, not a lane below) and drops straight down into
+    its target's top, rather than crowding the side the target's forward flow
+    leaves from."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p1'/>"
+        "<transition id='review'/>"
+        "<place id='p2'/>"
+        "<transition id='rework'/>"
+        "<arc id='a1' source='p1' target='review'/>"
+        "<arc id='a2' source='review' target='p2'/>"
+        "<arc id='a3' source='p2' target='rework'/>"
+        "<arc id='a4' source='rework' target='review'/>"  # back-edge (loop)
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+
+    centers = {}
+    waypoints = {}
+    for el in root.iter():
+        tag = el.tag.split("}")[-1]
+        if tag in ("place", "transition"):
+            pos = el.find("graphics/position")
+            if pos is not None:
+                centers[el.get("id")] = (int(pos.get("x")), int(pos.get("y")))
+        elif tag == "arc":
+            waypoints[el.get("id")] = [
+                (int(p.get("x")), int(p.get("y")))
+                for p in el.findall("graphics/position")
+            ]
+
+    # The back-edge is routed with interior bend points; the flat forward hop is not.
+    assert len(waypoints["a4"]) >= 1, "loop arc got no bend points"
+    assert waypoints["a1"] == []
+
+    # The loop drops straight down into the target's top: its final bend sits in
+    # the target's column (a vertical approach), coming from above its centre --
+    # not crowding the target's side.
+    assert waypoints["a4"][-1][0] == centers["review"][0], waypoints["a4"]
+    assert waypoints["a4"][-1][1] < centers["review"][1], waypoints["a4"]
+
+
+def test_assign_pnml_coordinates_straightens_multi_layer_arc():
+    """A multi-layer (skip) arc threads through its dummy chain as a clean
+    orthogonal staple -- up into a gap, across a single lane clear of the shapes
+    it skips, back down -- not a per-dummy staircase, a diagonal that could cut
+    through a shape, or a lane dipping below the diagram."""
+    pnml = (
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p0'/><transition id='t0'/><place id='p1'/><transition id='t1'/>"
+        "<place id='p2'/><transition id='t2'/><place id='p3'/>"
+        "<arc id='a0' source='p0' target='t0'/><arc id='a1' source='t0' target='p1'/>"
+        "<arc id='a2' source='p1' target='t1'/><arc id='a3' source='t1' target='p2'/>"
+        "<arc id='a4' source='p2' target='t2'/><arc id='a5' source='t2' target='p3'/>"
+        "<arc id='askip' source='p0' target='p3'/>"  # spans 6 layers
+        "</net></pnml>"
+    )
+
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
+    centers = {
+        el.get("id"): (
+            int(el.find("graphics/position").get("x")),
+            int(el.find("graphics/position").get("y")),
+        )
+        for el in root.iter()
+        if el.tag.split("}")[-1] in ("place", "transition")
+        and el.find("graphics/position") is not None
+    }
+    skip = next(a for a in root.iter() if a.get("id") == "askip")
+    pts = [
+        (int(p.get("x")), int(p.get("y"))) for p in skip.findall("graphics/position")
+    ]
+
+    # Threaded left to right through interior columns (between the endpoints).
+    assert len(pts) >= 2, f"skip arc not threaded: {pts}"
+    xs = [x for x, _ in pts]
+    assert xs == sorted(xs), f"bend x not monotonic across columns: {pts}"
+    assert all(centers["p0"][0] < x < centers["p3"][0] for x in xs), pts
+    # Orthogonal: every segment is horizontal or vertical (Manhattan), never a
+    # diagonal that could cut across a shape.
+    assert all(ax == bx or ay == by for (ax, ay), (bx, by) in zip(pts, pts[1:])), (
+        f"skip arc not orthogonal: {pts}"
+    )
+    # Its horizontal run is a single lane, and threads through the diagram rather
+    # than dipping below it.
+    lane_ys = {ay for (ax, ay), (bx, by) in zip(pts, pts[1:]) if ay == by}
+    assert len(lane_ys) == 1, f"skip lane not a single height: {pts}"
+    assert all(y <= max(c[1] for c in centers.values()) for _, y in pts), pts
 
 
 def test_assign_pnml_coordinates_passes_through_non_xml():
@@ -370,347 +504,120 @@ def test_assign_pnml_coordinates_passes_through_non_xml():
     assert assign_pnml_coordinates("not xml") == "not xml"
 
 
-def test_assign_pnml_coordinates_renames_places_and_normalizes_transition_labels():
-    """PNML post-processing renames places to Pn and strips task-type label
-    prefixes from transitions."""
+def test_assign_pnml_coordinates_handles_clean_transformer_output():
+    """Grounding test for the current (geometry-free) transformer output: nodes
+    carry no <graphics>, toolspecific blocks hold only semantic markers, and
+    pydantic-xml leaves a default id="" on nested elements. The post-step must
+    position every node, strip the noise id="", and preserve the semantic
+    operator/trigger/resource markers untouched."""
     pnml = (
-        "<pnml><net id='n1'>"
-        "<place id='startEvent1'/>"
-        "<transition id='task1'><name><text>[UserTask] Receive Bike and Deposit</text></name></transition>"
-        "<place id='SILENTFROMtask1TOtask2'/>"
-        "<transition id='task2'><name><text>[ServiceTask] Perform Repairs</text></name></transition>"
-        "<arc id='a1' source='startEvent1' target='task1'/>"
-        "<arc id='a2' source='task1' target='SILENTFROMtask1TOtask2'/>"
-        "<arc id='a3' source='SILENTFROMtask1TOtask2' target='task2'/>"
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='p1'/>"
+        "<transition id='t1'>"
+        "<name id=''><text>Do work</text></name>"
+        "<toolspecific id='' tool='WoPeD' version='1.0'>"
+        "<operator id='' type='102'/>"
+        "</toolspecific>"
+        "</transition>"
+        "<transition id='t2'>"
+        "<toolspecific id='' tool='WoPeD' version='1.0'>"
+        "<trigger id='' type='200'/>"
+        "<transitionResource id='' roleName='clerk' organizationalUnitName='office'/>"
+        "</toolspecific>"
+        "</transition>"
+        "<place id='p2'/>"
+        "<arc id='a1' source='p1' target='t1'/>"
+        "<arc id='a2' source='t1' target='p2'/>"
+        "<arc id='a3' source='p2' target='t2'/>"
         "</net></pnml>"
     )
 
     root = ET.fromstring(assign_pnml_coordinates(pnml))
 
-    place_ids = [
-        node.get("id")
-        for node in root.iter()
-        if node.tag.split("}")[-1] == "place"
-    ]
-    assert place_ids == ["P1", "P2"]
+    # Every node is positioned.
+    for node in root.iter():
+        if node.tag.split("}")[-1] in ("place", "transition"):
+            assert node.find("graphics/position") is not None
 
-    transitions = {
-        node.get("id"): node.find("name/text").text
-        for node in root.iter()
-        if node.tag.split("}")[-1] == "transition"
+    # The noise id="" is stripped everywhere; real ids survive.
+    assert all(el.get("id") != "" for el in root.iter())
+    assert {"p1", "t1", "t2", "p2"} <= {
+        el.get("id") for el in root.iter() if el.get("id")
     }
-    assert transitions["task1"] == "receive bike and deposit"
-    assert transitions["task2"] == "perform repairs"
 
-    arcs = [
-        (arc.get("source"), arc.get("target"))
-        for arc in root.iter()
-        if arc.tag.split("}")[-1] == "arc"
-    ]
-    assert ("P1", "task1") in arcs
-    assert ("task1", "P2") in arcs
-    assert ("P2", "task2") in arcs
+    # Semantic workflow markers are preserved untouched.
+    operator = root.find(".//toolspecific/operator")
+    assert operator is not None and operator.get("type") == "102"
+    resource = root.find(".//toolspecific/transitionResource")
+    assert resource is not None and resource.get("roleName") == "clerk"
 
 
-def test_assign_pnml_coordinates_enforces_transition_place_adjacency_and_no_orphans():
-    """Transition-to-transition links are bridged by places and isolated nodes
-    are removed from the PNML net."""
+def test_assign_pnml_coordinates_marks_the_source_place():
+    """A workflow net carries exactly one token, in its unique source place (the
+    place with no incoming arc). WoPeD needs that initial marking to play the
+    token game / run soundness -- without it the net is structurally complete
+    but "not started". The post-step must add the marking, and add it only to
+    the source, never to interior/sink places."""
     pnml = (
-        "<pnml><net id='n1'>"
-        "<place id='orphanPlace'/>"
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='src'/>"  # no incoming arc -> the source
         "<transition id='t1'/>"
-        "<transition id='t2'/>"
-        "<place id='p3'/>"
-        "<arc id='a1' source='t1' target='t2'/>"
-        "<arc id='a2' source='p3' target='t1'/>"
+        "<place id='sink'/>"  # has an incoming arc -> not the source
+        "<arc id='a1' source='src' target='t1'/>"
+        "<arc id='a2' source='t1' target='sink'/>"
         "</net></pnml>"
     )
 
     root = ET.fromstring(assign_pnml_coordinates(pnml))
 
-    place_ids = {
-        node.get("id")
-        for node in root.iter()
-        if node.tag.split("}")[-1] == "place" and node.get("id")
-    }
-    transition_ids = {
-        node.get("id")
-        for node in root.iter()
-        if node.tag.split("}")[-1] == "transition" and node.get("id")
-    }
+    markings = {}
+    for place in root.iter():
+        if place.tag.split("}")[-1] != "place":
+            continue
+        text = place.find("initialMarking/text")
+        markings[place.get("id")] = text.text if text is not None else None
 
-    arcs = [
-        (arc.get("source"), arc.get("target"))
-        for arc in root.iter()
-        if arc.tag.split("}")[-1] == "arc"
-    ]
-
-    assert "orphanPlace" not in place_ids
-
-    # No direct transition->transition or place->place arcs should remain.
-    for source, target in arcs:
-        assert not (source in transition_ids and target in transition_ids)
-        assert not (source in place_ids and target in place_ids)
-
-    # Every transition must have a place either before or after it.
-    adjacency = {transition_id: False for transition_id in transition_ids}
-    for source, target in arcs:
-        if source in transition_ids and target in place_ids:
-            adjacency[source] = True
-        if source in place_ids and target in transition_ids:
-            adjacency[target] = True
-    assert all(adjacency.values())
+    # The source holds one token; the sink holds none (no marking, or an
+    # explicit zero -- both mean "empty").
+    assert markings["src"] == "1", markings
+    assert markings["sink"] in (None, "0"), markings
 
 
-# ---------------------------------------------------------------------------
-# validate_pnml_connectivity
-# ---------------------------------------------------------------------------
-
-
-def _simple_pnml(transitions_and_arcs):
-    """Build a minimal PNML string from a list of (id, [inbound places], [outbound places])
-    tuples so individual validator tests need not repeat boilerplate."""
-    parts = ["<pnml><net id='n1'>"]
-    places = set()
-    for tid, ins, outs in transitions_and_arcs:
-        parts.append(f"<transition id='{tid}'/>")
-        places.update(ins)
-        places.update(outs)
-    for pid in sorted(places):
-        parts.append(f"<place id='{pid}'/>")
-    arc_id = 0
-    for tid, ins, outs in transitions_and_arcs:
-        for pid in ins:
-            parts.append(f"<arc id='a{arc_id}' source='{pid}' target='{tid}'/>")
-            arc_id += 1
-        for pid in outs:
-            parts.append(f"<arc id='a{arc_id}' source='{tid}' target='{pid}'/>")
-            arc_id += 1
-    parts.append("</net></pnml>")
-    return "".join(parts)
-
-
-def test_validate_pnml_connectivity_accepts_regular_transition():
-    """A transition with exactly one inbound and one outbound arc is valid."""
-    pnml = _simple_pnml([("t1", ["p_in"], ["p_out"])])
-    validate_pnml_connectivity(pnml)  # must not raise
-
-
-def test_validate_pnml_connectivity_accepts_split_gateway():
-    """A split gateway transition (one inbound, multiple outbound) is valid."""
-    pnml = _simple_pnml([("split", ["p_in"], ["p_out1", "p_out2"])])
-    validate_pnml_connectivity(pnml)  # must not raise
-
-
-def test_validate_pnml_connectivity_accepts_join_gateway():
-    """A join gateway transition (multiple inbound, one outbound) is valid."""
-    pnml = _simple_pnml([("join", ["p_in1", "p_in2"], ["p_out"])])
-    validate_pnml_connectivity(pnml)  # must not raise
-
-
-def test_validate_pnml_connectivity_rejects_transition_without_inbound():
-    """A transition with no inbound arc violates the connectivity constraint."""
-    pnml = _simple_pnml([("t_source", [], ["p_out"])])
-    with pytest.raises(PnmlStructureError, match="no inbound arc"):
-        validate_pnml_connectivity(pnml)
-
-
-def test_validate_pnml_connectivity_rejects_transition_without_outbound():
-    """A transition with no outbound arc violates the connectivity constraint."""
-    pnml = _simple_pnml([("t_sink", ["p_in"], [])])
-    with pytest.raises(PnmlStructureError, match="no outbound arc"):
-        validate_pnml_connectivity(pnml)
-
-
-def test_validate_pnml_connectivity_rejects_isolated_transition():
-    """A transition with neither inbound nor outbound arcs must raise once per direction."""
-    pnml = "<pnml><net id='n1'><transition id='isolated'/></net></pnml>"
-    with pytest.raises(PnmlStructureError) as exc_info:
-        validate_pnml_connectivity(pnml)
-    msg = str(exc_info.value)
-    assert "no inbound arc" in msg
-    assert "no outbound arc" in msg
-
-
-def test_validate_pnml_connectivity_reports_all_violations():
-    """When multiple transitions violate constraints all are reported in one error."""
-    pnml = _simple_pnml([
-        ("t_ok", ["p_in"], ["p_out"]),
-        ("t_no_in", [], ["p_mid"]),
-        ("t_no_out", ["p_mid"], []),
-    ])
-    with pytest.raises(PnmlStructureError) as exc_info:
-        validate_pnml_connectivity(pnml)
-    msg = str(exc_info.value)
-    assert "t_no_in" in msg
-    assert "t_no_out" in msg
-    assert "t_ok" not in msg
-
-
-def test_validate_pnml_connectivity_is_noop_for_empty_or_non_xml():
-    """Falsy or non-XML inputs are silently accepted; the caller guards the contract."""
-    validate_pnml_connectivity("")
-    validate_pnml_connectivity(None)
-    validate_pnml_connectivity("not xml at all")
-
-
-def test_validate_pnml_connectivity_pnml_structure_error_is_value_error():
-    """PnmlStructureError must be a ValueError subclass for existing handlers."""
-    pnml = _simple_pnml([("t_sink", ["p_in"], [])])
-    with pytest.raises(ValueError):
-        validate_pnml_connectivity(pnml)
-
-
-# ---------------------------------------------------------------------------
-# repair_pnml_connectivity_from_bpmn
-# ---------------------------------------------------------------------------
-
-
-def test_repair_pnml_connectivity_from_bpmn_adds_missing_transition_relay():
-    """When BPMN expects t1 -> t2, repair injects a PNML relay place/arc path."""
-    bpmn = (
-        "<?xml version='1.0' encoding='UTF-8'?>"
-        "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'>"
-        "<process id='p1'>"
-        "<sequenceFlow id='f1' sourceRef='t1' targetRef='t2'/>"
-        "</process></definitions>"
-    )
+def test_assign_pnml_coordinates_keeps_a_dense_layer_overlap_free():
+    """The layout's headline guarantee is an overlap-free diagram. A parallel
+    split fans several places into a single layer; none of them -- nor any other
+    node -- may be placed on the same coordinate, or the shapes render stacked on
+    top of each other. Asserts the guarantee directly: all node positions are
+    distinct."""
     pnml = (
-        "<pnml><net id='n1'>"
-        "<transition id='t1'/><transition id='t2'/>"
-        "<place id='p_in'/><place id='p_out'/>"
-        "<arc id='a1' source='p_in' target='t1'/>"
-        "<arc id='a2' source='t2' target='p_out'/>"
+        "<pnml><net id='n1' type='http://www.pnml.org/version-2009/grammar/pnmlcoremodel'>"
+        "<place id='src'/><transition id='split'/>"
+        "<place id='b1'/><place id='b2'/><place id='b3'/><place id='b4'/>"
+        "<transition id='join'/><place id='sink'/>"
+        "<arc id='a0' source='src' target='split'/>"
+        "<arc id='s1' source='split' target='b1'/>"
+        "<arc id='s2' source='split' target='b2'/>"
+        "<arc id='s3' source='split' target='b3'/>"
+        "<arc id='s4' source='split' target='b4'/>"
+        "<arc id='j1' source='b1' target='join'/>"
+        "<arc id='j2' source='b2' target='join'/>"
+        "<arc id='j3' source='b3' target='join'/>"
+        "<arc id='j4' source='b4' target='join'/>"
+        "<arc id='a9' source='join' target='sink'/>"
         "</net></pnml>"
     )
 
-    repaired = repair_pnml_connectivity_from_bpmn(pnml, bpmn)
-    validate_pnml_connectivity(repaired)
+    root = ET.fromstring(assign_pnml_coordinates(pnml))
 
-    root = ET.fromstring(repaired)
-    arcs = [
-        (arc.get("source"), arc.get("target"))
-        for arc in root.iter()
-        if arc.tag.split("}")[-1] == "arc"
-    ]
-    places = {
-        p.get("id")
-        for p in root.iter()
-        if p.tag.split("}")[-1] == "place" and p.get("id")
-    }
-
-    # There must be at least one relay place such that t1->place and place->t2.
-    assert any(src == "t1" and tgt in places for src, tgt in arcs)
-    assert any(src in places and tgt == "t2" for src, tgt in arcs)
-
-
-def test_repair_pnml_connectivity_from_bpmn_adds_anchors_for_event_side_flows():
-    """Flows from/to non-transition BPMN nodes still create missing in/out anchors."""
-    bpmn = (
-        "<?xml version='1.0' encoding='UTF-8'?>"
-        "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL'>"
-        "<process id='p1'>"
-        "<sequenceFlow id='f_in' sourceRef='startEvent1' targetRef='task1'/>"
-        "<sequenceFlow id='f_out' sourceRef='task1' targetRef='endEvent1'/>"
-        "</process></definitions>"
-    )
-    pnml = "<pnml><net id='n1'><transition id='task1'/></net></pnml>"
-
-    repaired = repair_pnml_connectivity_from_bpmn(pnml, bpmn)
-    validate_pnml_connectivity(repaired)
-
-    root = ET.fromstring(repaired)
-    inbound = 0
-    outbound = 0
-    for arc in root.iter():
-        if arc.tag.split("}")[-1] != "arc":
+    coords = {}
+    for node in root.iter():
+        if node.tag.split("}")[-1] not in ("place", "transition"):
             continue
-        source = arc.get("source")
-        target = arc.get("target")
-        if target == "task1":
-            inbound += 1
-        if source == "task1":
-            outbound += 1
-    assert inbound >= 1
-    assert outbound >= 1
+        pos = node.find("graphics/position")
+        assert pos is not None, f"{node.get('id')} got no position"
+        coords[node.get("id")] = (int(pos.get("x")), int(pos.get("y")))
 
-
-def test_sanitize_bpmn_for_transform_removes_duplicate_sequence_flows_and_edges():
-    bpmn = (
-        "<?xml version='1.0' encoding='UTF-8'?>"
-        "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL' "
-        "xmlns:bpmndi='http://www.omg.org/spec/BPMN/20100524/DI' "
-        "xmlns:di='http://www.omg.org/spec/DD/20100524/DI'>"
-        "<process id='p1'>"
-        "<startEvent id='s'/>"
-        "<userTask id='a'/>"
-        "<sequenceFlow id='f1' sourceRef='s' targetRef='a'/>"
-        "<sequenceFlow id='f2' sourceRef='s' targetRef='a'/>"
-        "</process>"
-        "<bpmndi:BPMNDiagram id='d1'><bpmndi:BPMNPlane id='pl1' bpmnElement='p1'>"
-        "<bpmndi:BPMNEdge id='f1_di' bpmnElement='f1'>"
-        "<di:waypoint x='0' y='0'/><di:waypoint x='1' y='1'/></bpmndi:BPMNEdge>"
-        "<bpmndi:BPMNEdge id='f2_di' bpmnElement='f2'>"
-        "<di:waypoint x='0' y='0'/><di:waypoint x='1' y='1'/></bpmndi:BPMNEdge>"
-        "</bpmndi:BPMNPlane></bpmndi:BPMNDiagram>"
-        "</definitions>"
-    )
-
-    sanitized = sanitize_bpmn_for_transform(bpmn)
-    root = ET.fromstring(sanitized)
-
-    flow_pairs = []
-    flow_ids = []
-    for flow in root.iter():
-        if flow.tag.split("}")[-1] != "sequenceFlow":
-            continue
-        flow_ids.append(flow.get("id"))
-        flow_pairs.append((flow.get("sourceRef"), flow.get("targetRef")))
-
-    assert flow_pairs == [("s", "a")]
-    assert flow_ids == ["f1"]
-
-    edge_targets = [
-        edge.get("bpmnElement")
-        for edge in root.iter()
-        if edge.tag.split("}")[-1] == "BPMNEdge"
-    ]
-    assert edge_targets == ["f1"]
-
-
-def test_sanitize_bpmn_for_transform_collapses_passthrough_gateway():
-    bpmn = (
-        "<?xml version='1.0' encoding='UTF-8'?>"
-        "<definitions xmlns='http://www.omg.org/spec/BPMN/20100524/MODEL' "
-        "xmlns:bpmndi='http://www.omg.org/spec/BPMN/20100524/DI' "
-        "xmlns:di='http://www.omg.org/spec/DD/20100524/DI'>"
-        "<process id='p1'>"
-        "<startEvent id='s'/>"
-        "<exclusiveGateway id='g1'/>"
-        "<userTask id='t1'/>"
-        "<sequenceFlow id='f1' sourceRef='s' targetRef='g1'/>"
-        "<sequenceFlow id='f2' sourceRef='g1' targetRef='t1'/>"
-        "</process>"
-        "<bpmndi:BPMNDiagram id='d1'><bpmndi:BPMNPlane id='pl1' bpmnElement='p1'>"
-        "<bpmndi:BPMNShape id='g1_di' bpmnElement='g1'>"
-        "<di:waypoint x='0' y='0'/></bpmndi:BPMNShape>"
-        "<bpmndi:BPMNEdge id='f1_di' bpmnElement='f1'>"
-        "<di:waypoint x='0' y='0'/><di:waypoint x='1' y='1'/></bpmndi:BPMNEdge>"
-        "<bpmndi:BPMNEdge id='f2_di' bpmnElement='f2'>"
-        "<di:waypoint x='0' y='0'/><di:waypoint x='1' y='1'/></bpmndi:BPMNEdge>"
-        "</bpmndi:BPMNPlane></bpmndi:BPMNDiagram>"
-        "</definitions>"
-    )
-
-    sanitized = sanitize_bpmn_for_transform(bpmn)
-    root = ET.fromstring(sanitized)
-
-    gateways = [
-        e for e in root.iter() if e.tag.split("}")[-1] in {"exclusiveGateway", "parallelGateway"}
-    ]
-    assert gateways == []
-
-    flows = [e for e in root.iter() if e.tag.split("}")[-1] == "sequenceFlow"]
-    assert len(flows) == 1
-    assert flows[0].get("sourceRef") == "s"
-    assert flows[0].get("targetRef") == "t1"
+    # All eight nodes (incl. the four parallel branches in one layer) are placed,
+    # and no two share a coordinate.
+    assert len(coords) == 8, coords
+    assert len(set(coords.values())) == len(coords), coords

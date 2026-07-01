@@ -1,9 +1,9 @@
 import logging
 import os
-from flask import Flask, request
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from config import config
-from flasgger import Swagger
+from flask_swagger_ui import get_swaggerui_blueprint
 from prometheus_client import (
     Counter,
     Histogram,
@@ -12,6 +12,13 @@ from prometheus_client import (
     REGISTRY,
 )
 from pythonjsonlogger import jsonlogger
+
+from app.request_id import (
+    REQUEST_ID_HEADER,
+    RequestIdFilter,
+    get_request_id,
+    set_request_id,
+)
 
 
 class _MetricProxy:
@@ -62,7 +69,10 @@ def create_app(config_name=None):
             r"/*": {
                 "origins": "*",
                 "methods": ["POST", "GET", "OPTIONS"],
-                "allow_headers": ["Content-Type", "Authorization"],
+                "allow_headers": ["Content-Type", "Authorization", REQUEST_ID_HEADER],
+                # Let browser clients (woped-web/-next) read the correlation id
+                # off the response so they can show/report it.
+                "expose_headers": [REQUEST_ID_HEADER],
             }
         },
     )
@@ -95,8 +105,9 @@ def create_app(config_name=None):
     else:
         console_handler = logging.StreamHandler()
         console_handler.addFilter(metrics_filter)
+        console_handler.addFilter(RequestIdFilter())
         console_formatter = jsonlogger.JsonFormatter(
-            "%(asctime)s %(levelname)s %(name)s %(message)s",
+            "%(asctime)s %(levelname)s %(name)s %(request_id)s %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
         console_handler.setFormatter(console_formatter)
@@ -105,51 +116,31 @@ def create_app(config_name=None):
 
     @app.before_request
     def suppress_metrics_logging():
+        # Bind the correlation id for every request: honour a client-supplied
+        # X-Request-ID, else mint one. Forwarded to the connector downstream.
+        set_request_id(request.headers.get(REQUEST_ID_HEADER))
         if request.path == "/metrics":
             app.logger.disabled = True
 
     @app.after_request
     def restore_logging(response):
         app.logger.disabled = False
+        # Echo the correlation id so the caller can quote it when reporting a
+        # failure; browser clients can read it via the CORS expose_headers above.
+        response.headers[REQUEST_ID_HEADER] = get_request_id()
         return response
 
     from app.api import api_bp
 
     app.register_blueprint(api_bp, url_prefix="")
 
-    # Flasgger / OpenAPI setup.
-    swagger_template = {
-        "openapi": "3.0.2",
-        "info": {
-            "title": "WOPED T2P Orchestrator API",
-            "version": "2.1.0",
-            "description": "Text-to-model transformation service.",
-        },
-        "components": {
-            "securitySchemes": {
-                "bearerAuth": {
-                    "type": "http",
-                    "scheme": "bearer",
-                    "description": "The LLM provider API key, sent as a bearer token.",
-                }
-            }
-        },
-    }
-    swagger_config = {
-        "headers": [],
-        "specs": [
-            {
-                "endpoint": "openapi",
-                "route": "/openapi.json",
-                "rule_filter": lambda rule: True,
-                "model_filter": lambda tag: True,
-            }
-        ],
-        "static_url_path": "/flasgger_static",
-        "swagger_ui": True,
-        "specs_route": "/swagger/",
-    }
-    Swagger(app, template=swagger_template, config=swagger_config)
+    # Swagger UI
+    SWAGGER_URL = "/swagger"
+    # Relative so the spec resolves under a reverse-proxy mount prefix
+    # (e.g. https://host/t2p-2.0/swagger/ -> /t2p-2.0/api/swagger.yaml).
+    API_URL = "../api/swagger.yaml"
+    swaggerui_blueprint = get_swaggerui_blueprint(SWAGGER_URL, API_URL)
+    app.register_blueprint(swaggerui_blueprint, url_prefix=SWAGGER_URL)
 
     # Create and register Prometheus metrics in the app context to avoid
     # duplicate registration when modules are imported multiple times.

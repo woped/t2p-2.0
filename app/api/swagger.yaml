@@ -6,10 +6,12 @@ info:
     `/v2` namespace. Existing unversioned generation endpoints remain
     functional during their deprecation period; clients should migrate to
     `/v2`. The previously deprecated `/api_call` endpoint has been removed.
-  version: 2.1.0
+  version: 2.2.0
   contact:
     name: API Support
 servers:
+  - url: https://woped.dhbw-karlsruhe.de/t2p-2.0
+    description: Production (behind the Apache reverse proxy)
   - url: http://localhost:5000
     description: Local development server
 
@@ -37,6 +39,10 @@ paths:
         '400':
           $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '429':
           $ref: '#/components/responses/Error'
         '500':
           $ref: '#/components/responses/Error'
@@ -69,6 +75,10 @@ paths:
         '400':
           $ref: '#/components/responses/Error'
         '401':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '429':
           $ref: '#/components/responses/Error'
         '500':
           $ref: '#/components/responses/Error'
@@ -323,13 +333,35 @@ components:
       properties:
         error:
           type: object
+          required: [code, message, request_id]
           properties:
             code:
               type: string
+              description: >-
+                Stable identifier. Codes relayed from the connector:
+                `invalid_request`, `invalid_provider` (400); `unauthorized` (401);
+                `model_unprocessable` (422 — the description could not be turned
+                into a valid model; carries `details`); `upstream_error`
+                (429 retryable). Codes produced by this service: `deprecated`
+                (410); `upstream_error` (500 connector unreachable);
+                `transform_error`, `invalid_model`, `internal_error` (500).
               example: invalid_request
             message:
               type: string
               example: "Missing or empty field(s): provider."
+            request_id:
+              type: string
+              description: >-
+                Correlation id, always present; mirrors the `X-Request-ID`
+                response header so a caller can quote it to pin the failure.
+              example: 3f1c9a8e-2b4d-4e9a-9f1a-7c2e0b5d6a11
+            details:
+              type: array
+              items:
+                type: string
+              description: >-
+                Optional structured specifics; present for `model_unprocessable`,
+                listing the concrete validation problems.
 
 tags:
   - name: v2

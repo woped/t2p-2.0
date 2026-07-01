@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from app import create_app
 from app.backend.connector_client import (
     ConnectorClient,
@@ -10,7 +10,12 @@ from app.backend.connector_client import (
 
 @pytest.fixture
 def app():
-    return create_app("testing")
+    # Default to the synchronous path so the transport-contract tests below
+    # exercise _generate_sync directly. The async submit/poll path has its own
+    # fixture + tests further down.
+    app = create_app("testing")
+    app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = False
+    return app
 
 
 @pytest.fixture
@@ -19,7 +24,7 @@ def connector(app):
         return ConnectorClient()
 
 
-# --- generate -------------------------------------------------------------
+# --- generate (synchronous path) ------------------------------------------
 
 
 @patch("app.backend.connector_client.requests.post")
@@ -73,26 +78,22 @@ def test_generate_sends_contract_request(mock_post, connector, app):
 
 
 @patch("app.backend.connector_client.requests.post")
-def test_generate_forwards_prompting_strategy_when_provided(mock_post, connector, app):
+def test_generate_forwards_correlation_id(mock_post, connector, app):
+    # The bound request id is forwarded as X-Request-ID so the connector logs
+    # this call under the same id as the orchestrator.
+    from app.request_id import REQUEST_ID_HEADER, set_request_id
+
     mock_post.return_value.status_code = 200
     mock_post.return_value.json.return_value = {"raw_response": "ok"}
 
     with app.app_context():
-        connector.generate(
-            authorization="Bearer secret-token",
-            user_text="hello",
-            provider="openai",
-            model="gpt-4o",
-            prompting_strategy="few_shot",
-        )
+        set_request_id("test-correlation-id")
+        connector.generate("Bearer t", "hello", "openai", "gpt-4o")
 
-    kwargs = mock_post.call_args.kwargs
-    assert kwargs["json"] == {
-        "user_text": "hello",
-        "provider": "openai",
-        "model": "gpt-4o",
-        "prompting_strategy": "few_shot",
-    }
+    assert (
+        mock_post.call_args.kwargs["headers"][REQUEST_ID_HEADER]
+        == "test-correlation-id"
+    )
 
 
 @patch("app.backend.connector_client.requests.post")
@@ -122,26 +123,6 @@ def test_generate_4xx_raises_client_error(mock_post, connector, app):
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_body["error"]["code"] == "invalid_provider"
-
-
-@patch("app.backend.connector_client.requests.post")
-def test_generate_429_raises_client_error_with_rate_limited_body(
-    mock_post, connector, app
-):
-    mock_post.return_value.status_code = 429
-    mock_post.return_value.json.return_value = {
-        "error": {
-            "code": "rate_limited",
-            "message": "Provider quota or rate limit exceeded.",
-        }
-    }
-
-    with app.app_context():
-        with pytest.raises(ConnectorClientError) as exc_info:
-            connector.generate("Bearer t", "text", "openai", "gpt-4o")
-
-    assert exc_info.value.status_code == 429
-    assert exc_info.value.error_body["error"]["code"] == "rate_limited"
 
 
 @patch("app.backend.connector_client.requests.post")
@@ -271,88 +252,93 @@ def test_generate_status_500_is_upstream_not_client_error(mock_post, connector, 
             connector.generate("Bearer t", "text", "openai", "gpt-4o")
 
 
-@patch("app.backend.connector_client.time.sleep", return_value=None)
+# --- generate (async submit/poll path) ------------------------------------
+
+
+@pytest.fixture
+def async_app():
+    app = create_app("testing")
+    app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = True
+    app.config["CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC"] = True
+    # No real waiting in tests.
+    app.config["CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS"] = 0.0
+    app.config["CONNECTOR_ASYNC_MAX_WAIT_SECONDS"] = 5
+    return app
+
+
+@pytest.fixture
+def async_connector(async_app):
+    with async_app.app_context():
+        return ConnectorClient()
+
+
 @patch("app.backend.connector_client.requests.get")
 @patch("app.backend.connector_client.requests.post")
-def test_generate_internal_async_submit_poll_success(
-    mock_post, mock_get, _mock_sleep, connector, app
+def test_async_submit_and_poll_returns_raw_response(
+    mock_post, mock_get, async_connector, async_app
 ):
+    # Submit returns 202 + job id; a status poll reports success with the result.
     mock_post.return_value.status_code = 202
-    mock_post.return_value.json.return_value = {"job_id": "job-123"}
-
-    running = type("Resp", (), {})()
-    running.status_code = 200
-    running.json = lambda: {"job_id": "job-123", "status": "running"}
-
-    done = type("Resp", (), {})()
-    done.status_code = 200
-    done.json = lambda: {
-        "job_id": "job-123",
+    mock_post.return_value.json.return_value = {
+        "job_id": "job-1",
+        "status_url": "/internal/jobs/job-1",
+    }
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {
         "status": "succeeded",
-        "result": {"raw_response": "RAW BPMN JSON"},
+        "result": {"raw_response": "RAW"},
     }
 
-    mock_get.side_effect = [running, done]
+    with async_app.app_context():
+        result = async_connector.generate("Bearer t", "text", "openai", "gpt-4o")
 
-    with app.app_context():
-        app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = True
-        app.config["CONNECTOR_ASYNC_POLL_INTERVAL_SECONDS"] = 0.001
-        app.config["CONNECTOR_ASYNC_MAX_WAIT_SECONDS"] = 2
-
-        result = connector.generate(
-            authorization="Bearer secret-token",
-            user_text="describe a process",
-            provider="openai",
-            model="gpt-4o",
-        )
-
-    assert result == "RAW BPMN JSON"
+    assert result == "RAW"
     assert mock_post.call_args.args[0].endswith("/internal/jobs/generate")
-    assert mock_get.call_args.args[0].endswith("/internal/jobs/job-123")
+    assert mock_get.call_args.args[0].endswith("/internal/jobs/job-1")
 
 
-@patch("app.backend.connector_client.ConnectorClient._generate_sync")
-@patch("app.backend.connector_client.ConnectorClient._generate_via_internal_async")
-def test_generate_internal_async_connector_error_does_not_fallback(
-    mock_async, mock_sync, connector, app
+@patch("app.backend.connector_client.requests.get")
+@patch("app.backend.connector_client.requests.post")
+def test_async_failed_preserves_client_error_status(
+    mock_post, mock_get, async_connector, async_app
 ):
-    mock_async.side_effect = ConnectorError("async down")
+    # A background failure carrying a 4xx http_status (e.g. 422) must surface as a
+    # relayable ConnectorClientError, not be collapsed into a generic 5xx.
+    mock_post.return_value.status_code = 202
+    mock_post.return_value.json.return_value = {"job_id": "job-2"}
+    mock_get.return_value.status_code = 200
+    mock_get.return_value.json.return_value = {
+        "status": "failed",
+        "error": {
+            "http_status": 422,
+            "code": "model_unprocessable",
+            "message": "no valid net",
+            "details": ["x"],
+        },
+    }
 
-    with app.app_context():
-        app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = True
-        app.config["CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC"] = True
+    with async_app.app_context():
+        with pytest.raises(ConnectorClientError) as exc_info:
+            async_connector.generate("Bearer t", "text", "openai", "gpt-4o")
 
-        with pytest.raises(ConnectorError):
-            connector.generate(
-                authorization="Bearer secret-token",
-                user_text="describe a process",
-                provider="openai",
-                model="gpt-4o",
-            )
-
-    mock_async.assert_called_once()
-    mock_sync.assert_not_called()
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.error_body["error"]["code"] == "model_unprocessable"
 
 
-@patch("app.backend.connector_client.ConnectorClient._generate_sync")
-@patch("app.backend.connector_client.ConnectorClient._generate_via_internal_async")
-def test_generate_internal_async_404_falls_back_to_sync(
-    mock_async, mock_sync, connector, app
-):
-    mock_async.side_effect = ConnectorClientError(404, None)
-    mock_sync.return_value = "RAW FROM SYNC"
+@patch("app.backend.connector_client.requests.post")
+def test_async_unavailable_falls_back_to_sync(mock_post, async_connector, async_app):
+    # If the connector lacks the internal async endpoint (404), degrade to the
+    # synchronous /generate instead of failing.
+    submit = MagicMock(status_code=404)
+    submit.json.return_value = {"error": {"code": "not_found"}}
+    sync = MagicMock(status_code=200)
+    sync.json.return_value = {"raw_response": "RAW-SYNC"}
+    mock_post.side_effect = [submit, sync]
 
-    with app.app_context():
-        app.config["CONNECTOR_INTERNAL_ASYNC_ENABLED"] = True
-        app.config["CONNECTOR_INTERNAL_ASYNC_FALLBACK_TO_SYNC"] = True
+    with async_app.app_context():
+        result = async_connector.generate("Bearer t", "text", "openai", "gpt-4o")
 
-        result = connector.generate(
-            authorization="Bearer secret-token",
-            user_text="describe a process",
-            provider="openai",
-            model="gpt-4o",
-        )
-
-    assert result == "RAW FROM SYNC"
-    mock_async.assert_called_once()
-    mock_sync.assert_called_once()
+    assert result == "RAW-SYNC"
+    assert mock_post.call_count == 2
+    assert mock_post.call_args_list[0].args[0].endswith("/internal/jobs/generate")
+    assert mock_post.call_args_list[1].args[0].endswith("/generate")

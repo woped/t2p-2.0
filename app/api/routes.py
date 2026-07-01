@@ -5,25 +5,23 @@ from functools import wraps
 
 import requests
 from flask import jsonify, make_response, request, send_from_directory
-from flasgger import swag_from
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api import api_bp
 from app.__init__ import REQUEST_COUNT, REQUEST_LATENCY
-from app.backend.bpmn_builder import InvalidModelError, raw_response_to_bpmn
+from app.backend.bpmn_builder import (
+    InvalidModelError,
+    raw_response_to_bpmn,
+    raw_response_to_semantic_bpmn,
+)
 from app.backend.connector_client import (
     ConnectorClient,
     ConnectorClientError,
     ConnectorError,
 )
 from app.backend.modeltransformer import ModelTransformer
-from app.backend.xml_parser import (
-    PnmlStructureError,
-    assign_pnml_coordinates,
-    repair_pnml_connectivity_from_bpmn,
-    sanitize_bpmn_for_transform,
-    validate_pnml_connectivity,
-)
+from app.backend.pnml_writer import assign_pnml_coordinates
+from app.request_id import get_request_id
 
 # Module-level logger for routes
 logger = logging.getLogger(__name__)
@@ -51,8 +49,13 @@ def deprecated(view):
 
 
 def _error_response(status_code, code, message):
-    """Build the standard v2 error body: {"error": {"code", "message"}}."""
-    return jsonify({"error": {"code": code, "message": message}}), status_code
+    """Build the standard v2 error body: {"error": {"code", "message", "request_id"}}.
+
+    ``request_id`` is the correlation id (also on the ``X-Request-ID`` response
+    header) so a caller can quote it to pin the failure in the logs.
+    """
+    body = {"error": {"code": code, "message": message, "request_id": get_request_id()}}
+    return jsonify(body), status_code
 
 
 def _removed_api_call_response():
@@ -72,38 +75,34 @@ def _removed_api_call_response():
     return response
 
 
-def _generate_bpmn(authorization, text, provider, model, prompting_strategy=None):
-    raw_response = ConnectorClient().generate(
+def _connector_generate(authorization, text, provider, model):
+    return ConnectorClient().generate(
         authorization=authorization,
         user_text=text,
         provider=provider,
         model=model,
-        prompting_strategy=prompting_strategy,
     )
-    return raw_response_to_bpmn(raw_response)
+
+
+def _generate_bpmn(authorization, text, provider, model):
+    """Generate laid-out BPMN XML from a text prompt."""
+    return raw_response_to_bpmn(
+        _connector_generate(authorization, text, provider, model)
+    )
+
+
+def _generate_semantic_bpmn(authorization, text, provider, model):
+    """Generate geometry-free BPMN XML -- the input the PNML path feeds the transformer."""
+    return raw_response_to_semantic_bpmn(
+        _connector_generate(authorization, text, provider, model)
+    )
 
 
 def _transform_to_pnml(bpmn_xml):
-    bpmn_xml = sanitize_bpmn_for_transform(bpmn_xml)
-    # The incoming BPMN already carries a layout, but the transformer discards
-    # it and we recompute coordinates on the PNML below. That double layout is
-    # intentional: both paths reuse the same BPMN builder, and the cost is
-    # negligible next to the LLM call and transformer round-trip. Avoiding it
-    # would mean emitting layout-free BPMN, which the transformer may reject.
+    # The transformer ignores BPMN layout, so the PNML path builds layout-free
+    # BPMN (see _generate_bpmn callers). We lay out the PNML once, here.
     pnml_xml = ModelTransformer().transform(bpmn_xml, {"direction": "bpmntopnml"})
-    pnml_xml = assign_pnml_coordinates(pnml_xml)
-    pnml_xml = repair_pnml_connectivity_from_bpmn(pnml_xml, bpmn_xml)
-    pnml_xml = assign_pnml_coordinates(pnml_xml)
-    try:
-        validate_pnml_connectivity(pnml_xml)
-    except PnmlStructureError as exc:
-        # Best-effort delivery: return partially repaired PNML instead of
-        # failing the request when residual structural issues remain.
-        logger.warning(
-            "Returning best-effort PNML with residual connectivity issues",
-            extra={"error": str(exc)},
-        )
-    return pnml_xml
+    return assign_pnml_coordinates(pnml_xml)
 
 
 def _legacy_generate(target):
@@ -122,25 +121,29 @@ def _legacy_generate(target):
             status = "400"
             return jsonify({"error": f"Missing data for: {', '.join(missing)}"}), 400
 
-        bpmn_xml = _generate_bpmn(
+        gen = dict(
             authorization=f"Bearer {data['api_key']}",
             text=data["text"],
             provider=_LEGACY_PROVIDER,
             model=_LEGACY_MODEL,
         )
-        result = _transform_to_pnml(bpmn_xml) if target == "pnml" else bpmn_xml
+        result = (
+            _transform_to_pnml(_generate_semantic_bpmn(**gen))
+            if target == "pnml"
+            else _generate_bpmn(**gen)
+        )
         return jsonify({"result": result}), 200
-    except requests.exceptions.RequestException:
+    except requests.exceptions.RequestException as exc:
         status = "500"
-        logger.exception("Legacy transformation failed")
+        logger.error("Legacy transformation failed", extra={"error": str(exc)})
         return jsonify({"error": "BPMN to PNML transformation failed."}), 500
-    except ConnectorError:
+    except ConnectorError as exc:
         status = "500"
-        logger.exception("Legacy connector call failed")
+        logger.error("Legacy connector call failed", extra={"error": str(exc)})
         return jsonify({"error": "LLM API connector error."}), 500
-    except (ConnectorClientError, ValueError):
+    except (ConnectorClientError, ValueError) as exc:
         status = "500"
-        logger.exception("Legacy generation failed")
+        logger.error("Legacy generation failed", extra={"error": str(exc)})
         return jsonify({"error": "Invalid response from LLM API."}), 500
     finally:
         duration = time.time() - start_time
@@ -232,57 +235,30 @@ def _v2_generate(target):
         if not isinstance(data, dict):
             data = {}
 
-        bpmn_xml = _generate_bpmn(
+        gen = dict(
             authorization=authorization,
             text=data.get("text"),
             provider=data.get("provider"),
             model=data.get("model"),
-            prompting_strategy=data.get("prompting_strategy"),
         )
 
         if target == "pnml":
+            bpmn_xml = _generate_semantic_bpmn(**gen)
             try:
                 result = _transform_to_pnml(bpmn_xml)
-            except requests.exceptions.RequestException:
-                prompting_strategy = data.get("prompting_strategy")
-                if prompting_strategy == "few_shot":
-                    logger.warning(
-                        "Few-shot BPMN failed PNML transform, retrying with zero_shot",
-                        extra={"endpoint": endpoint_label},
-                    )
-                    try:
-                        fallback_bpmn_xml = _generate_bpmn(
-                            authorization=authorization,
-                            text=data.get("text"),
-                            provider=data.get("provider"),
-                            model=data.get("model"),
-                            prompting_strategy="zero_shot",
-                        )
-                        result = _transform_to_pnml(fallback_bpmn_xml)
-                    except requests.exceptions.RequestException:
-                        status = "500"
-                        logger.exception(
-                            "BPMN to PNML transformation failed (few_shot + zero_shot fallback)",
-                            extra={"endpoint": endpoint_label},
-                        )
-                        return _error_response(
-                            500,
-                            "transform_error",
-                            "The BPMN to PNML transformation service failed.",
-                        )
-                else:
-                    status = "500"
-                    logger.exception(
-                        "BPMN to PNML transformation failed",
-                        extra={"endpoint": endpoint_label},
-                    )
-                    return _error_response(
-                        500,
-                        "transform_error",
-                        "The BPMN to PNML transformation service failed.",
-                    )
+            except requests.exceptions.RequestException as e:
+                status = "500"
+                logger.error(
+                    "BPMN to PNML transformation failed",
+                    extra={"endpoint": endpoint_label, "error": str(e)},
+                )
+                return _error_response(
+                    500,
+                    "transform_error",
+                    "The BPMN to PNML transformation service failed.",
+                )
         else:
-            result = bpmn_xml
+            result = _generate_bpmn(**gen)
 
         logger.info("v2 generate completed", extra={"endpoint": endpoint_label})
         return jsonify({"result": result}), 200
@@ -304,13 +280,14 @@ def _v2_generate(target):
         )
     except ConnectorError as e:
         status = "500"
-        logger.exception(
+        logger.error(
             "Connector call failed",
-            extra={"endpoint": endpoint_label},
+            extra={"endpoint": endpoint_label, "error": str(e)},
         )
-        detail = str(e) if str(e) else "The LLM API connector is unavailable."
-        return _error_response(500, "upstream_error", detail)
-    except (InvalidModelError, PnmlStructureError) as e:
+        return _error_response(
+            500, "upstream_error", "The LLM API connector is unavailable."
+        )
+    except InvalidModelError as e:
         status = "500"
         logger.warning(
             "Connector returned an invalid process model",
@@ -334,138 +311,16 @@ def _v2_generate(target):
 
 
 @api_bp.route("/v2/generate/bpmn", methods=["POST"])
-@swag_from(
-    {
-        "tags": ["v2"],
-        "summary": "Generate BPMN",
-        "description": "Generate a BPMN model from process text.",
-        "security": [{"bearerAuth": []}],
-        "requestBody": {
-            "required": True,
-            "content": {
-                "application/json": {
-                    "schema": {
-                        "type": "object",
-                        "required": ["text", "provider", "model"],
-                        "properties": {
-                            "text": {"type": "string"},
-                            "provider": {"type": "string"},
-                            "model": {"type": "string"},
-                            "prompting_strategy": {
-                                "type": "string",
-                                "enum": ["zero_shot", "few_shot"],
-                                "default": "zero_shot",
-                            },
-                        },
-                    }
-                }
-            },
-        },
-        "responses": {
-            "200": {
-                "description": "Generation successful",
-                "content": {
-                    "application/json": {
-                        "schema": {
-                            "type": "object",
-                            "properties": {"result": {"type": "string"}},
-                        }
-                    }
-                },
-            },
-            "400": {"description": "Invalid request"},
-            "401": {"description": "Unauthorized"},
-            "500": {"description": "Internal or upstream error"},
-        },
-    }
-)
 def v2_generate_bpmn():
     return _v2_generate("bpmn")
 
 
 @api_bp.route("/v2/generate/pnml", methods=["POST"])
-@swag_from(
-    {
-        "tags": ["v2"],
-        "summary": "Generate PNML",
-        "description": "Generate a PNML model from process text via BPMN transformation.",
-        "security": [{"bearerAuth": []}],
-        "requestBody": {
-            "required": True,
-            "content": {
-                "application/json": {
-                    "schema": {
-                        "type": "object",
-                        "required": ["text", "provider", "model"],
-                        "properties": {
-                            "text": {"type": "string"},
-                            "provider": {"type": "string"},
-                            "model": {"type": "string"},
-                            "prompting_strategy": {
-                                "type": "string",
-                                "enum": ["zero_shot", "few_shot"],
-                                "default": "zero_shot",
-                            },
-                        },
-                    }
-                }
-            },
-        },
-        "responses": {
-            "200": {
-                "description": "Generation successful",
-                "content": {
-                    "application/json": {
-                        "schema": {
-                            "type": "object",
-                            "properties": {"result": {"type": "string"}},
-                        }
-                    }
-                },
-            },
-            "400": {"description": "Invalid request"},
-            "401": {"description": "Unauthorized"},
-            "500": {"description": "Internal, upstream, or transform error"},
-        },
-    }
-)
 def v2_generate_pnml():
     return _v2_generate("pnml")
 
 
 @api_bp.route("/v2/models", methods=["GET"])
-@swag_from(
-    {
-        "tags": ["v2"],
-        "summary": "List available models",
-        "description": "List provider/model pairs advertised by the connector.",
-        "responses": {
-            "200": {
-                "description": "Available models",
-                "content": {
-                    "application/json": {
-                        "schema": {
-                            "type": "object",
-                            "properties": {
-                                "models": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "properties": {
-                                            "provider": {"type": "string"},
-                                            "model": {"type": "string"},
-                                        },
-                                    },
-                                }
-                            },
-                        }
-                    }
-                },
-            },
-            "500": {"description": "Upstream or internal error"},
-        },
-    }
-)
 def v2_models():
     start_time = time.time()
     status = "200"
@@ -489,26 +344,6 @@ def v2_models():
 
 
 @api_bp.route("/v2/health", methods=["GET"])
-@swag_from(
-    {
-        "tags": ["v2"],
-        "summary": "Health check",
-        "description": "Shallow service liveness endpoint.",
-        "responses": {
-            "200": {
-                "description": "Service is up",
-                "content": {
-                    "application/json": {
-                        "schema": {
-                            "type": "object",
-                            "properties": {"status": {"type": "string"}},
-                        }
-                    }
-                },
-            }
-        },
-    }
-)
 def v2_health():
     REQUEST_COUNT.labels(method="GET", endpoint="/v2/health", status="200").inc()
     return jsonify({"status": "ok"}), 200

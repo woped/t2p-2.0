@@ -1,3 +1,23 @@
+2026-06-29
+- Propagated a per-request X-Request-ID end-to-end; every v2 error body now
+  carries a request_id (also on the X-Request-ID response header) for log
+  correlation, and the id is forwarded to the connector.
+- Reverted the BPMN builder to a pure translator: dropped the graph/referential
+  validation and content-rewriting normalizers. invalid_model is now only a
+  crash-safety net, raised for a reply that is not valid JSON or whose graph is
+  malformed enough to fail during build -- not for general structural checks.
+- Brought the PNML layouter to full textbook-grade Sugiyama: overlap-free
+  placement, straightened spine, and explicit arc waypoints for rework-loop
+  back-edges and multi-layer arcs.
+- Skipped the unused BPMN layout on the PNML path; marked the PNML source place
+  with an initial token and showed the exclusive-gateway X marker in laid-out
+  BPMN.
+- Documented that /v2/generate/* relays the connector's 422 model_unprocessable
+  (with details) and 429 upstream_error responses unchanged.
+- Raised the connector HTTP timeout 60s -> 180s so slow reasoning models finish
+  before the client gives up; fixed Swagger docs behind the reverse-proxy prefix.
+- Applied security dependency bumps and bumped the service to 2.2.0.
+
 2026-06-08
 - Introduced the versioned /v2 API: /v2/generate/bpmn, /v2/generate/pnml,
   /v2/models, and /v2/health.

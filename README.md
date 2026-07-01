@@ -11,10 +11,15 @@ This repository contains a Flask-based web API for converting and transforming p
 - "/v2/models" Route - Lists the available provider/model pairs (proxied from the connector)
 - "/test_connection", "/generate_bpmn", "/generate_BPMN", "/generate_pnml" and "/generate_PNML" Routes - Functional deprecated compatibility endpoints until 2026-12-01
 - "/_/_/echo" Route - Operational liveness endpoint
+- "/example" Route - Trivial static stub used as a routing smoke test
 - "/metrics" Route - Prometheus metrics endpoint
 - "/swagger" Route - Interactive Swagger UI rendered from the OpenAPI spec
 - "/api/swagger.yaml" Route - Swagger/OpenAPI specification
 - "/api_call" Route - Removed endpoint after its 2025-12-31 sunset date
+
+Every request carries a correlation id on the `X-Request-ID` response header
+(echoed from the request when supplied, otherwise generated); the same id is
+included as `request_id` in every v2 error body and forwarded to the connector.
 
 ## Installation
 

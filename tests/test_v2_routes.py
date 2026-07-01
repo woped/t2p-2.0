@@ -25,7 +25,6 @@ def test_v2_generate_bpmn_success(mock_cc, client):
         user_text="describe a process",
         provider="openai",
         model="gpt-4o",
-        prompting_strategy=None,
     )
 
 
@@ -58,32 +57,6 @@ def test_v2_generate_pnml_transform_error_returns_500(mock_cc, mock_mt, client):
     assert resp.get_json()["error"]["code"] == "transform_error"
 
 
-@patch("app.api.routes.ModelTransformer")
-@patch("app.api.routes.ConnectorClient")
-def test_v2_generate_pnml_few_shot_transform_retries_with_zero_shot(
-    mock_cc, mock_mt, client
-):
-    import requests
-
-    mock_cc.return_value.generate.side_effect = [RAW_MODEL_JSON, RAW_MODEL_JSON]
-    mock_mt.return_value.transform.side_effect = [
-        requests.exceptions.RequestException("few_shot transform fail"),
-        "PNML",
-    ]
-
-    resp = client.post(
-        "/v2/generate/pnml",
-        json={**BODY, "prompting_strategy": "few_shot"},
-        headers=AUTH,
-    )
-
-    assert resp.status_code == 200
-    assert resp.get_json() == {"result": "PNML"}
-    assert mock_cc.return_value.generate.call_count == 2
-    assert mock_cc.return_value.generate.call_args_list[0].kwargs["prompting_strategy"] == "few_shot"
-    assert mock_cc.return_value.generate.call_args_list[1].kwargs["prompting_strategy"] == "zero_shot"
-
-
 # Request validation is owned by the connector (the authoritative validator);
 # the orchestrator forwards the request and relays the connector's response. The
 # following tests assert that forward-and-relay behavior rather than a duplicate
@@ -113,7 +86,6 @@ def test_v2_generate_forwards_missing_auth_and_relays_401(mock_cc, client):
         user_text="describe a process",
         provider="openai",
         model="gpt-4o",
-        prompting_strategy=None,
     )
 
 
@@ -140,7 +112,6 @@ def test_v2_generate_forwards_missing_field_and_relays_400(mock_cc, client):
         user_text="x",
         provider="openai",
         model=None,
-        prompting_strategy=None,
     )
 
 
@@ -171,7 +142,6 @@ def test_v2_generate_non_json_is_forwarded_as_empty(mock_cc, client):
         user_text=None,
         provider=None,
         model=None,
-        prompting_strategy=None,
     )
 
 
@@ -200,21 +170,27 @@ def test_v2_generate_relays_connector_4xx(mock_cc, client):
 
 
 @patch("app.api.routes.ConnectorClient")
-def test_v2_generate_relays_connector_429(mock_cc, client):
-    mock_cc.return_value.generate.side_effect = ConnectorClientError(
-        429,
-        {
-            "error": {
-                "code": "rate_limited",
-                "message": "Provider quota or rate limit exceeded.",
-            }
-        },
-    )
+def test_v2_generate_relays_422_model_unprocessable_with_details(mock_cc, client):
+    # Validation exhaustion in the connector is a 422 (unprocessable input, not
+    # an upstream failure). As a 4xx it is relayed verbatim, so the friendly
+    # message AND the structured `details` reach the client unchanged.
+    body = {
+        "error": {
+            "code": "model_unprocessable",
+            "message": "Could not generate a valid process model from the description.",
+            "details": [
+                "Node 'task_3' has multiple outgoing flows; a split must use a gateway."
+            ],
+        }
+    }
+    mock_cc.return_value.generate.side_effect = ConnectorClientError(422, body)
 
     resp = client.post("/v2/generate/bpmn", json=BODY, headers=AUTH)
 
-    assert resp.status_code == 429
-    assert resp.get_json()["error"]["code"] == "rate_limited"
+    assert resp.status_code == 422
+    relayed = resp.get_json()["error"]
+    assert relayed["code"] == "model_unprocessable"
+    assert relayed["details"] == body["error"]["details"]
 
 
 @patch("app.api.routes.ConnectorClient")
@@ -254,6 +230,49 @@ def test_v2_generate_invalid_model_returns_500(mock_cc, client):
 
     assert resp.status_code == 500
     assert resp.get_json()["error"]["code"] == "invalid_model"
+
+
+# --- correlation id -------------------------------------------------------
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_v2_response_echoes_request_id_header(mock_cc, client):
+    # Every response carries an X-Request-ID, minted when the client sends none.
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+
+    resp = client.post("/v2/generate/bpmn", json=BODY, headers=AUTH)
+
+    assert resp.status_code == 200
+    assert resp.headers.get("X-Request-ID")
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_v2_honours_inbound_request_id(mock_cc, client):
+    # A client-supplied X-Request-ID is honoured and echoed back unchanged.
+    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
+
+    resp = client.post(
+        "/v2/generate/bpmn",
+        json=BODY,
+        headers={**AUTH, "X-Request-ID": "client-supplied-id"},
+    )
+
+    assert resp.headers.get("X-Request-ID") == "client-supplied-id"
+
+
+@patch("app.api.routes.ConnectorClient")
+def test_v2_error_body_carries_matching_request_id(mock_cc, client):
+    # The error body's request_id matches the X-Request-ID header, so a caller
+    # can pin the failure in the logs from either.
+    mock_cc.return_value.generate.side_effect = ConnectorError("down")
+
+    resp = client.post(
+        "/v2/generate/bpmn", json=BODY, headers={**AUTH, "X-Request-ID": "trace-42"}
+    )
+
+    assert resp.status_code == 500
+    assert resp.get_json()["error"]["request_id"] == "trace-42"
+    assert resp.headers.get("X-Request-ID") == "trace-42"
 
 
 # --- /v2/models -----------------------------------------------------------
@@ -327,28 +346,6 @@ def test_legacy_bpmn_uses_default_model_and_builds_bpmn(mock_cc, client):
         user_text="describe a process",
         provider="openai",
         model="gpt-4o",
-        prompting_strategy=None,
-    )
-
-
-@patch("app.api.routes.ConnectorClient")
-def test_v2_generate_bpmn_forwards_few_shot_strategy(mock_cc, client):
-    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
-
-    resp = client.post(
-        "/v2/generate/bpmn",
-        json={**BODY, "prompting_strategy": "few_shot"},
-        headers=AUTH,
-    )
-
-    assert resp.status_code == 200
-    assert "<definitions" in resp.get_json()["result"]
-    mock_cc.return_value.generate.assert_called_once_with(
-        authorization="Bearer secret-token",
-        user_text="describe a process",
-        provider="openai",
-        model="gpt-4o",
-        prompting_strategy="few_shot",
     )
 
 
@@ -365,79 +362,3 @@ def test_legacy_pnml_uses_new_flow_and_preserves_response(mock_cc, mock_mt, clie
     assert resp.status_code == 200
     assert resp.get_json() == {"result": "<pnml>legacy</pnml>"}
     mock_mt.return_value.transform.assert_called_once()
-
-
-# --- PNML connectivity validation -----------------------------------------
-
-
-@patch("app.api.routes.validate_pnml_connectivity")
-@patch("app.api.routes.ModelTransformer")
-@patch("app.api.routes.ConnectorClient")
-def test_v2_generate_pnml_runs_connectivity_validation(mock_cc, mock_mt, mock_validate, client):
-    """validate_pnml_connectivity is called on the PNML returned by the transformer."""
-    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
-    mock_mt.return_value.transform.return_value = "<pnml>some net</pnml>"
-
-    resp = client.post("/v2/generate/pnml", json=BODY, headers=AUTH)
-
-    assert resp.status_code == 200
-    mock_validate.assert_called_once()
-
-
-@patch("app.api.routes.repair_pnml_connectivity_from_bpmn")
-@patch("app.api.routes.ModelTransformer")
-@patch("app.api.routes.ConnectorClient")
-def test_v2_generate_pnml_runs_bpmn_guided_repair(mock_cc, mock_mt, mock_repair, client):
-    """The PNML pipeline repairs connectivity using BPMN before final validation."""
-    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
-    mock_mt.return_value.transform.return_value = "<pnml><net id='n1'/></pnml>"
-    mock_repair.side_effect = lambda pnml_xml, _bpmn_xml: pnml_xml
-
-    resp = client.post("/v2/generate/pnml", json=BODY, headers=AUTH)
-
-    assert resp.status_code == 200
-    mock_repair.assert_called_once()
-
-
-@patch("app.api.routes.validate_pnml_connectivity")
-@patch("app.api.routes.ModelTransformer")
-@patch("app.api.routes.ConnectorClient")
-def test_v2_generate_pnml_connectivity_failure_returns_best_effort_pnml(
-    mock_cc, mock_mt, mock_validate, client
-):
-    """Residual validation failures should still return a best-effort PNML payload."""
-    from app.backend.xml_parser import PnmlStructureError
-
-    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
-    mock_mt.return_value.transform.return_value = "<pnml><net id='n1'/></pnml>"
-    mock_validate.side_effect = PnmlStructureError(
-        "PNML connectivity check failed: transition 't1' has no inbound arc."
-    )
-
-    resp = client.post("/v2/generate/pnml", json=BODY, headers=AUTH)
-
-    assert resp.status_code == 200
-    assert "<pnml" in resp.get_json()["result"]
-
-
-@patch("app.api.routes.validate_pnml_connectivity")
-@patch("app.api.routes.ModelTransformer")
-@patch("app.api.routes.ConnectorClient")
-def test_legacy_generate_pnml_connectivity_failure_returns_best_effort_pnml(
-    mock_cc, mock_mt, mock_validate, client
-):
-    """Legacy PNML route should also return best-effort PNML on residual issues."""
-    from app.backend.xml_parser import PnmlStructureError
-
-    mock_cc.return_value.generate.return_value = RAW_MODEL_JSON
-    mock_mt.return_value.transform.return_value = "<pnml><net id='n1'/></pnml>"
-    mock_validate.side_effect = PnmlStructureError(
-        "PNML connectivity check failed: transition 't1' has no outbound arc."
-    )
-
-    resp = client.post(
-        "/generate_PNML", json={"text": "describe a process", "api_key": "secret-token"}
-    )
-
-    assert resp.status_code == 200
-    assert "<pnml" in resp.get_json()["result"]
