@@ -344,7 +344,8 @@ components:
                 into a valid model; carries `details`); `upstream_error`
                 (429 retryable). Codes produced by this service: `deprecated`
                 (410); `upstream_error` (500 connector unreachable);
-                `transform_error`, `invalid_model`, `internal_error` (500).
+                `upstream_error` (502 connector payload incompatibility);
+                `transform_error`, `internal_error` (500).
               example: invalid_request
             message:
               type: string

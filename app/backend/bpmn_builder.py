@@ -3,11 +3,11 @@ import json
 from app.backend.bpmn_writer import laid_out_bpmn, semantic_bpmn
 
 
-class InvalidModelError(ValueError):
-    """The connector returned a process model that cannot be processed.
+class ConnectorPayloadError(ValueError):
+    """Connector payload could not be decoded or converted safely.
 
-    Subclasses ``ValueError`` so existing ValueError handlers keep catching it.
-    The route layer maps it to an ``invalid_model`` response.
+    This is an integration-contract safety error, not a business validation
+    error. Request/model validation is owned by the connector.
     """
 
 
@@ -16,7 +16,7 @@ def _decode(raw_response):
     try:
         return json.loads(raw_response)
     except (json.JSONDecodeError, TypeError) as exc:
-        raise InvalidModelError("Connector response is not valid JSON.") from exc
+        raise ConnectorPayloadError("Connector response is not valid JSON.") from exc
 
 
 def _build(raw_response, build):
@@ -25,13 +25,13 @@ def _build(raw_response, build):
     Graph validity (flows referencing real nodes, reachability, ...) is the
     connector's contract to guarantee and is no longer re-checked here. This
     keeps only a crash-safety net: a malformed model that would otherwise raise
-    a ``KeyError`` while building is surfaced as a clean ``invalid_model`` error.
+    a ``KeyError`` while building is surfaced as an integration payload error.
     """
     model = _decode(raw_response)
     try:
         return build(model)
     except KeyError as exc:
-        raise InvalidModelError(
+        raise ConnectorPayloadError(
             "Process model could not be built (malformed graph)."
         ) from exc
 

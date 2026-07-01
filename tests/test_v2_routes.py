@@ -221,15 +221,15 @@ def test_v2_generate_unexpected_error_returns_internal_error_500(mock_cc, client
 
 
 @patch("app.api.routes.ConnectorClient")
-def test_v2_generate_invalid_model_returns_500(mock_cc, client):
-    # The connector replied, but the model is unreadable: surfaced as
-    # invalid_model rather than a generic internal error.
+def test_v2_generate_invalid_payload_returns_502_upstream_error(mock_cc, client):
+    # The connector replied, but payload decoding/building failed locally:
+    # surfaced as an upstream integration error.
     mock_cc.return_value.generate.return_value = "not a json model"
 
     resp = client.post("/v2/generate/bpmn", json=BODY, headers=AUTH)
 
-    assert resp.status_code == 500
-    assert resp.get_json()["error"]["code"] == "invalid_model"
+    assert resp.status_code == 502
+    assert resp.get_json()["error"]["code"] == "upstream_error"
 
 
 # --- correlation id -------------------------------------------------------
